@@ -1,0 +1,16 @@
+# 服务: /waypoint_manager/get_waypoints
+# 获取指定地图的全部航点列表
+
+# 地图名（空字符串返回所有地图的航点）
+string map_name
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 航点列表
+rhw_msgs/WaypointTask[] waypoints
+
+# 结果说明
+string message

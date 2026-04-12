@@ -1,0 +1,13 @@
+# 服务: /waypoint_manager/add_waypoint
+# 添加航点到指定地图
+
+# 待添加的航点信息
+rhw_msgs/WaypointTask waypoint
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 结果说明
+string message

@@ -1,0 +1,10 @@
+# 服务: /mission/stop
+# 停止当前巡检任务（取消导航并清空队列）
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 结果说明
+string message

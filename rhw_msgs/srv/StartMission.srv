@@ -1,0 +1,16 @@
+# 服务: /mission/start
+# 启动巡检任务
+
+# 地图名
+string map_name
+
+# 有序航点 ID 列表（按此顺序执行）
+string[] waypoint_ids
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 结果说明
+string message

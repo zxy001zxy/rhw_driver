@@ -1,0 +1,13 @@
+# 服务: /mission/pause
+# 暂停/恢复当前巡检任务
+
+# true=暂停, false=恢复
+bool pause
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 结果说明
+string message

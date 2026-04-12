@@ -1,0 +1,16 @@
+# 服务: /waypoint_manager/delete_waypoint
+# 从指定地图中删除航点
+
+# 地图名
+string map_name
+
+# 要删除的航点 ID
+string waypoint_id
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 结果说明
+string message
