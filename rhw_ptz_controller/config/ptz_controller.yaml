@@ -1,0 +1,34 @@
+ptz_controller_node:
+  ros__parameters:
+    camera_ip: "192.168.10.64"
+    camera_port: 80
+    camera_username: "admin"
+    camera_password: "rhw1314000"
+    use_https: false
+    verify_ssl: false
+    timeout: 5.0
+    default_channel: 1
+    default_speed: 40
+    default_duration_ms: 350
+    status_publish_period: 2.0
+    capture_save_dir: "/tmp/ptz_captures"  # 抓拍图片默认保存目录
+
+camera_publisher_node:
+  ros__parameters:
+    camera_ip: "192.168.10.64"
+    rtsp_port: 554
+    rtsp_username: "admin"
+    rtsp_password: "rhw1314000"
+    rtsp_path: "/Streaming/Channels/101"
+    rtsp_url_override: ""
+    frame_rate: 30.0
+    image_topic: "/camera/rgb/image_raw"
+    frame_id: "camera_link"
+    reconnect_interval: 3.0
+    rtsp_transport: "tcp"              # tcp 更稳定不丢帧，udp 延迟更低
+    publish_compressed: true           # 同时发布 /camera/rgb/image_raw/compressed
+    jpeg_quality: 70                   # JPEG 压缩质量 1-100
+    output_width: 1920                 # 输出宽度，0=保持原尺寸
+    output_height: 1080                # 输出高度，0=保持原尺寸
+    qos_reliability: "reliable"     # reliable(兼容 rqt 等) / best_effort(低延迟)
+    qos_depth: 1                       # 发布队列深度，1=只保留最新帧
