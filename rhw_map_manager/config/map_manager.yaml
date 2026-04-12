@@ -1,0 +1,29 @@
+map_manager_node:
+  ros__parameters:
+    # --- 建图 ---
+    mapping_workspace: ~/lightning-lm
+    mapping_command: ros2 run lightning run_slam_online --config ./config/default.yaml
+
+    # --- 导航 ---
+    navigation_workspace: ~/lightning-lm
+    navigation_command_template: >-
+      ros2 launch nav2_bringup bringup_launch.py use_sim_time:=False map:="{map_path}"
+    navigation_extra_commands:
+      - ros2 run rviz2 rviz2 -d nav_ws/nav2_default_view.rviz
+      - ros2 run tf2_ros static_transform_publisher 0.38 0 0.31 0 0 0 base_link rslidar
+      - ros2 run lightning run_loc_online --config ./config/default.yaml
+
+    # --- 保存地图（调 lightning 内置服务） ---
+    save_map_workspace: ~/lightning-lm
+
+    save_map_command_template: >-
+      ros2 service call /lightning/save_map lightning/srv/SaveMap "{{map_id: '{map_name}'}}"
+    save_map_timeout: 60.0
+
+    # --- 地图目录 ---
+    # lightning 保存格式: <map_dir>/<map_name>/map.yaml
+    map_dir: ~/lightning-lm/data
+    map_yaml_name: map.yaml
+
+    # --- 状态发布周期 ---
+    mode_state_topic_period: 1.0
