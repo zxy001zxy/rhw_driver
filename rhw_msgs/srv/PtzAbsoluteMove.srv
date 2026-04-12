@@ -1,0 +1,25 @@
+# 服务: /ptz/absolute_move
+# 绝对位置移动（方位角 + 俯仰角）
+
+# 通道号
+uint8 channel
+
+# 方位角（水平，度）
+float32 azimuth
+
+# 俯仰角（垂直，度）
+float32 elevation
+
+# 水平移动速度 1-100，0 表示不指定
+uint8 azimuth_speed
+
+# 垂直移动速度 1-100，0 表示不指定
+uint8 elevation_speed
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 结果说明
+string message

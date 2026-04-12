@@ -1,0 +1,19 @@
+# 服务: /ptz/patrol
+# 启动/停止巡航
+
+# 通道号
+uint8 channel
+
+# 巡航编号
+uint8 patrol_id
+
+# 0: stop  1: start
+uint8 action
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 结果说明
+string message

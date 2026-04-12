@@ -1,0 +1,38 @@
+# 服务: /move_base_simple/goal
+# 请求头，当前实现未使用，预留给时间戳和来源标识
+std_msgs/Header header
+
+# 导航类型与模式组合字段
+# 低 4 位 nav_type: 0 自由导航, 1 手绘路径导航, 2 录制路径导航
+# 高 4 位 nav_mode: 0 前进, 1 后退, 2 横移(仅 FW 底盘支持)
+# 前进自由导航
+# type = 0 + (0 << 4) = 0
+# 后退自由导航
+# type = 0 + (1 << 4) = 16
+# 横移自由导航
+# type = 0 + (2 << 4) = 32
+# 前进手绘路径
+# type = 1 + (0 << 4) = 1
+# 前进录制路径
+# type = 2 + (0 << 4) = 2
+
+uint8 type
+
+# 自由导航目标点，nav_type = 0 时使用，目标坐标系应为 map
+geometry_msgs/PoseStamped goal
+
+# 手绘路径，nav_type = 1 时使用，至少需要 2 个路径点
+nav_msgs/Path graph_path
+
+# 录制路径，nav_type = 2 时使用，至少需要 2 个路径点
+nav_msgs/Path record_path
+
+---
+
+# 导航结果
+# 1 成功
+# 2 已取消
+# 3 已到达
+# 4 不可达或输入无效
+int8 result
+

@@ -1,0 +1,19 @@
+# 服务: /ptz/get_position
+# 获取云台当前角度
+
+# 通道号
+uint8 channel
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 方位角（水平，度）
+float32 azimuth
+
+# 俯仰角（垂直，度）
+float32 elevation
+
+# 结果说明
+string message

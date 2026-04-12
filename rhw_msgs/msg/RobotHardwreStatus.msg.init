@@ -1,0 +1,19 @@
+std_msgs/Header header
+
+uint8 type 				        #底盘类型
+
+bool emergency_stop 			#急停按钮状态   0：没触发 1：触发
+
+bool odom				        #里程计状态     0:异常  1：正常
+bool gps				        #gps状态        0:异常  1：正常
+bool lidar				        #激光雷达状态    0:异常  1：正常
+bool imu				        #imu状态         0:异常  1：正常
+bool cameras                    #摄像头状态       0:异常  1：正常
+bool ultrasonic 			    #超声波状态       0:异常  1：正常
+
+uint8 cameras_obs               #前后相机检测障碍物结果   0：都没检测到障碍物   1：前摄像头检测到障碍物  2：后摄像头检测到障碍物  3：前后都检测到障碍物
+uint8 anticollision 			#防撞条状态 0：没触发 1：前防撞条触发 2：后防撞条触发 3：前后防撞条触发
+uint16 error 				    #故障代码
+uint8 battery_percentage        #电量百分比
+uint16 io 				        #io状态
+uint8 charge 				    #充电状态   0:没处于充电中  1:处于充电中

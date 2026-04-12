@@ -1,0 +1,14 @@
+# 服务: /dis_recharge
+# 请求头，当前实现未使用，预留给时间戳和来源标识
+std_msgs/Header header
+
+# 脱桩命令文本
+# 当前实现未解析具体字符串内容，调用该服务即执行脱桩流程
+std_msgs/String dis_recharge
+
+---
+
+# 脱桩结果
+# 0 脱桩失败
+# 1 脱桩成功
+int8 result

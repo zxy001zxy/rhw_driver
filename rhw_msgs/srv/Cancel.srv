@@ -1,0 +1,13 @@
+# 服务: /move_base/cancel
+# 请求头，当前实现未使用，预留给时间戳和来源标识
+std_msgs/Header header
+
+# 取消控制
+# 1 触发取消当前导航/回充任务
+uint8 cancel 
+
+---
+
+# 处理结果
+# 2 已取消或任务已被抢占/中止
+int8 result  

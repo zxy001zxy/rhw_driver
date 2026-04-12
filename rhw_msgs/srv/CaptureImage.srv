@@ -1,0 +1,38 @@
+# 服务: /ptz/capture_image
+# 手动抓拍——通过 ISAPI 抓图并保存到本地
+
+# 通道号，默认 1
+uint8 channel
+
+# URL 类型: cloudURL / localURL，默认 localURL
+string url_type
+
+# 通道格式: 留空表示普通通道号；streamTrack 表示按码流 ID（如 102）抓图
+string channel_format
+
+# 图片保存的完整路径（含文件名），例如 /home/user/images/snap.jpg
+# 留空时使用节点参数 capture_save_dir + 自动时间戳文件名
+string save_path
+
+# 图片类型: 设备仅支持 JPEG（默认 JPEG，可留空）
+string image_type
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 抓拍接口返回的图片 URL
+string capture_url
+
+# 实际保存的文件完整路径
+string file_path
+
+# 图片大小（字节）
+uint32 file_size
+
+# 是否已下载并保存到本地
+bool saved
+
+# 结果说明
+string message

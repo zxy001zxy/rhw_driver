@@ -1,0 +1,16 @@
+# 服务: /mode_manager/save_map
+# 保存当前 栅格地图
+
+# 地图名称，例如 indoor122
+string map_name
+
+---
+
+# 处理结果
+# 0 保存失败
+# 1 保存成功
+int8 result
+
+
+# 结果说明
+string message

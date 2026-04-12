@@ -1,0 +1,9 @@
+# 路径有效性检查请求
+std_msgs/Header header                  # 标准消息头，包含时间戳和坐标系
+
+nav_msgs/Path checked_path              # 待校验的路径
+
+---
+
+# 路径有效性检查响应
+int8 result                             # 校验结果，0 或正值表示有效，负值表示无效或检查失败

@@ -1,0 +1,19 @@
+# 服务: /map_manager/delete_map
+# 删除指定的已保存地图
+
+# 请求头
+std_msgs/Header header
+
+# 要删除的地图名称
+string map_name
+
+---
+
+# 处理结果
+# 0 删除失败
+# 1 删除成功
+# 2 地图不存在
+int8 result
+
+# 结果说明
+string message

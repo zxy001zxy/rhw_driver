@@ -1,0 +1,19 @@
+# 服务: /set_initial_pose
+# 设置机器人初始位姿，用于导航启动后的定位初始化
+# APP 在地图上点选初始位置后调用此服务
+
+# 请求头
+std_msgs/Header header
+
+# 初始位姿（在 map 坐标系下）
+geometry_msgs/PoseWithCovarianceStamped init_pose
+
+---
+
+# 处理结果
+# 0 设置失败
+# 1 设置成功
+int8 result
+
+# 结果说明
+string message

@@ -1,0 +1,16 @@
+# 服务: /ptz/goto_preset
+# 跳转到预置位（回中等）
+
+# 通道号
+uint8 channel
+
+# 预置位编号
+uint8 preset_id
+
+---
+
+# 0 失败 1 成功
+int8 result
+
+# 结果说明
+string message

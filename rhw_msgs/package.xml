@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+
+<package format="3">
+  <name>rhw_msgs</name>
+  <version>0.0.0</version>
+  <description>The rhw_msgs package</description>
+  <maintainer email="xwqf@todo.todo">xwqf</maintainer>
+  <license>TODO</license>
+
+  <!-- 构建工具依赖 -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 消息/服务生成所需的构建依赖 -->
+  <build_depend>rosidl_default_generators</build_depend>
+
+  <!-- 消息定义中依赖的其他消息包（编译和运行时都需要） -->
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>nav_msgs</depend>
+
+  <!-- 执行时依赖（一般由 rosidl_default_runtime 提供） -->
+  <exec_depend>rosidl_default_runtime</exec_depend>
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <!-- 测试依赖（可选） -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

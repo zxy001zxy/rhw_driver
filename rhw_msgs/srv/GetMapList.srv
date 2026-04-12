@@ -1,0 +1,21 @@
+# 服务: /map_manager/get_map_list
+# 获取已保存的地图列表，APP 在导航前需要展示可用地图供用户选择
+
+# 请求头，预留给时间戳和来源标识
+std_msgs/Header header
+
+---
+
+# 处理结果
+# 0 获取失败
+# 1 获取成功
+int8 result
+
+# 地图名称列表
+string[] map_names
+
+# 每个地图对应的保存时间戳（与 map_names 一一对应，格式 "2026-03-30 12:00:00"）
+string[] map_timestamps
+
+# 结果说明
+string message

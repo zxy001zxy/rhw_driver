@@ -1,0 +1,19 @@
+# 服务: /map_manager/load_map
+# 加载指定地图，导航前需先选择并加载地图
+
+# 请求头
+std_msgs/Header header
+
+# 要加载的地图名称，例如 "indoor122"
+string map_name
+
+---
+
+# 处理结果
+# 0 加载失败
+# 1 加载成功
+# 2 地图不存在
+int8 result
+
+# 结果说明
+string message

@@ -1,0 +1,35 @@
+# 服务: /mode_manager/switch_mode
+# 用于在建图模式与导航模式之间切换，本质上是切换运行中的 launch
+
+# 目标模式
+# 0: mapping
+# 1: navigation
+uint8 target_mode
+
+# 目标 launch 配置名称，留给上层区分不同建图/导航方案
+# 为空时使用默认 launch 配置
+string launch_profile
+
+# 是否强制重启，即使当前已经处于目标模式也重新拉起对应 launch
+bool force_restart
+
+# 额外透传给 launch 的参数，格式示例: ["map_name:=indoor122", "use_sim_time:=false"]
+string[] launch_args
+
+---
+
+# 处理结果
+# 0 失败
+# 1 成功
+# 2 正在切换，拒绝重复请求
+# 3 请求参数非法
+int8 result
+
+# 切换完成后的当前模式
+uint8 current_mode
+
+# 当前激活的 launch 标识
+string active_launch
+
+# 结果说明
+string message
