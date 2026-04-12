@@ -27,6 +27,8 @@ set(msg_files
   "msg/SetRegion.msg"
   "msg/NavigationStatus.msg"
   "msg/PtzStatus.msg"
+  "msg/WaypointTask.msg"
+  "msg/MissionStatus.msg"
   # "msg/DynamicParams.msg"
   # "msg/Gps.msg"
 )
@@ -51,6 +53,12 @@ set(srv_files
   "srv/PtzAbsoluteMove.srv"
   "srv/PtzGetPosition.srv"
   "srv/CaptureImage.srv"
+  "srv/AddWaypoint.srv"
+  "srv/DeleteWaypoint.srv"
+  "srv/GetWaypoints.srv"
+  "srv/StartMission.srv"
+  "srv/StopMission.srv"
+  "srv/PauseMission.srv"
 )
 
 # 生成接口（消息和服务）
