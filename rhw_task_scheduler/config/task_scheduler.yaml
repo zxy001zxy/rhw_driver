@@ -1,0 +1,52 @@
+# ============================================================
+# rhw_task_scheduler 配置文件
+# ============================================================
+
+waypoint_manager:
+  ros__parameters:
+    # 航点持久化目录
+    storage_dir: "~/.rhw/waypoints"
+
+    # 服务名
+    add_waypoint_service: "/waypoint_manager/add_waypoint"
+    delete_waypoint_service: "/waypoint_manager/delete_waypoint"
+    get_waypoints_service: "/waypoint_manager/get_waypoints"
+
+mission_bt_node:
+  ros__parameters:
+    # ---------- 行为树 ----------
+    bt_tick_rate_hz: 10.0
+
+    # ---------- 导航 ----------
+    goal_service: "/move_base_simple/goal"
+    cancel_service: "/move_base/cancel"
+    nav_status_topic: "/navigation_status"
+    nav_retry_max: 3
+
+    # ---------- PTZ ----------
+    ptz_goto_preset_service: "/ptz/goto_preset"
+    ptz_capture_service: "/ptz/capture_image"
+    ptz_status_topic: "/ptz/status"
+    ptz_stable_timeout_sec: 5.0
+    default_ptz_channel: 1
+
+    # ---------- 充电 ----------
+    recharge_service: "/recharge"
+
+    # ---------- 电池监控 ----------
+    battery_topic: "/robot/battery_status"
+    low_battery_threshold: 20.0
+
+    # ---------- 任务超时 ----------
+    waypoint_task_timeout_sec: 120.0
+
+    # ---------- MQTT ----------
+    mqtt_enabled: false
+    mqtt_broker_host: "127.0.0.1"
+    mqtt_broker_port: 1883
+    mqtt_client_id: "rhw_mission_bt"
+    mqtt_mission_start_topic: "rhw/mission/start"
+    mqtt_mission_status_topic: "rhw/mission/status"
+
+    # ---------- 话题 ----------
+    mission_status_topic: "/mission/status"
