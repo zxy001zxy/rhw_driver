@@ -1,0 +1,35 @@
+udp_bridge_node:
+  ros__parameters:
+    bind_host: "0.0.0.0"
+    bind_port: 30000
+    robot_host: "10.21.31.103"
+    robot_port: 30000
+    receive_filter_host: "10.21.41.1"
+    receive_filter_port: 30000
+    heartbeat_period_sec: 1.0
+    basic_status_topic: "/robot/basic_status"
+    motion_status_topic: "/robot/motion_status"
+    battery_status_topic: "/robot/battery_status"
+    status_frame_id: "base_link"
+    heartbeat_type: 100
+    heartbeat_command: 100
+    heartbeat_time_format: "%Y-%m-%d %H:%M:%S"
+    motion_command: 4
+    battery_command: 5
+    basic_command: 6
+    packet_header: [235, 145, 235, 144]
+    socket_timeout_sec: 0.5
+
+mqtt_forwarder_node:
+  ros__parameters:
+    broker_host: "127.0.0.1"
+    broker_port: 1883
+    client_id: "rhw_udp_mqtt_bridge"
+    source_topic: "/robot/basic_status"
+    mqtt_topic: "rhw/robot/basic_status"
+    enabled_topics:
+      - "/robot/basic_status"
+      - "/robot/motion_status"
+      - "/robot/battery_status"
+    qos: 0
+    retain: false
