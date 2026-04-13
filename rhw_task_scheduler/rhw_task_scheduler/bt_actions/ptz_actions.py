@@ -14,6 +14,13 @@ from rclpy.node import Node
 from rhw_msgs.msg import PtzStatus
 from rhw_msgs.srv import CaptureImage as CaptureImageSrv
 from rhw_msgs.srv import PtzGotoPreset as PtzGotoPresetSrv
+from rhw_task_scheduler.debug_tools import (
+    is_debug_mock_enabled,
+    parse_task_params,
+    run_mock_action,
+    safe_slug,
+)
+from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
 
 class PtzGotoPreset(py_trees.behaviour.Behaviour):
@@ -29,33 +36,98 @@ class PtzGotoPreset(py_trees.behaviour.Behaviour):
         self._bb = self.attach_blackboard_client()
         self._bb.register_key(key='/current_waypoint', access=py_trees.common.Access.READ)
 
+        if hasattr(self._node, '_service_audit'):
+            self._audit = self._node._service_audit
+        else:
+            self._audit = ServiceAuditPublisher(self._node)
+
         srv_name = self._node.get_parameter('ptz_goto_preset_service').value
         self._client = self._node.create_client(PtzGotoPresetSrv, srv_name)
         self._default_channel = int(self._node.get_parameter('default_ptz_channel').value)
         self._future = None
+        self._mock_start_time: float | None = None
+        self._mock_audit_sent = False
 
     def initialise(self) -> None:
         self._future = None
+        self._mock_start_time = time.monotonic()
 
     def update(self) -> py_trees.common.Status:
+        wp = self._bb.get('/current_waypoint')
+
+        if is_debug_mock_enabled(self._node):
+            srv_name = self._node.get_parameter('ptz_goto_preset_service').value
+            params = parse_task_params(wp)
+            if not self._mock_audit_sent:
+                self._mock_audit_sent = True
+                self._req_time = time.time()
+                self._audit.publish(
+                    service=srv_name,
+                    role='client',
+                    phase='request',
+                    request={
+                        'channel': int(params.get('channel', self._default_channel)),
+                        'preset_id': int(params.get('preset_id', 1)),
+                    },
+                    details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
+                )
+
+            mock_status = run_mock_action(
+                node=self._node,
+                start_time=self._mock_start_time,
+                result_parameter='debug_mock_ptz_result',
+            )
+            if mock_status != py_trees.common.Status.RUNNING:
+                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+                self._audit.publish(
+                    service=srv_name,
+                    role='client',
+                    phase='response',
+                    response={'result': 1 if mock_status == py_trees.common.Status.SUCCESS else 0},
+                    success=(mock_status == py_trees.common.Status.SUCCESS),
+                    duration_ms=duration,
+                    details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
+                )
+                self._node.get_logger().info(
+                    f'[DEBUG MOCK] PtzGotoPreset -> {mock_status.name} wp={wp.get("waypoint_id", "?") if wp else "?"}'
+                )
+            return mock_status
+
         if self._future is not None:
             # 等待异步结果
             if not self._future.done():
                 return py_trees.common.Status.RUNNING
             try:
                 result = self._future.result()
+                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+                self._audit.publish(
+                    service=self._node.get_parameter('ptz_goto_preset_service').value,
+                    role='client',
+                    phase='response',
+                    response={'result': int(result.result), 'message': str(result.message)},
+                    success=(result.result == 1),
+                    duration_ms=duration,
+                )
                 if result.result == 1:
                     self._node.get_logger().info('PTZ goto preset succeeded')
                     return py_trees.common.Status.SUCCESS
                 self._node.get_logger().warning(f'PTZ goto preset failed: {result.message}')
                 return py_trees.common.Status.FAILURE
             except Exception as exc:
+                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+                self._audit.publish(
+                    service=self._node.get_parameter('ptz_goto_preset_service').value,
+                    role='client',
+                    phase='response',
+                    success=False,
+                    duration_ms=duration,
+                    details={'error': str(exc)},
+                )
                 self._node.get_logger().error(f'PTZ goto preset exception: {exc}')
                 return py_trees.common.Status.FAILURE
 
         # 解析参数
-        wp = self._bb.get('/current_waypoint')
-        params = self._parse_task_params(wp)
+        params = parse_task_params(wp)
 
         if not self._client.service_is_ready():
             self._node.get_logger().warning('PTZ goto_preset service not ready')
@@ -68,22 +140,15 @@ class PtzGotoPreset(py_trees.behaviour.Behaviour):
         self._node.get_logger().info(
             f'PTZ goto preset: ch={req.channel} preset={req.preset_id}'
         )
+        self._req_time = time.time()
+        self._audit.publish(
+            service=self._node.get_parameter('ptz_goto_preset_service').value,
+            role='client',
+            phase='request',
+            request={'channel': int(req.channel), 'preset_id': int(req.preset_id)},
+        )
         self._future = self._client.call_async(req)
         return py_trees.common.Status.RUNNING
-
-    @staticmethod
-    def _parse_task_params(wp: dict | None) -> dict:
-        if wp is None:
-            return {}
-        raw = wp.get('task_params', '')
-        if not raw:
-            return {}
-        import json
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-
 
 class WaitPtzStable(py_trees.behaviour.Behaviour):
     """等待云台动作完成（active_action == 'idle'）."""
@@ -107,6 +172,13 @@ class WaitPtzStable(py_trees.behaviour.Behaviour):
         self._start_time = time.monotonic()
 
     def update(self) -> py_trees.common.Status:
+        if is_debug_mock_enabled(self._node):
+            return run_mock_action(
+                node=self._node,
+                start_time=self._start_time,
+                result_parameter='debug_mock_ptz_result',
+            )
+
         if self._active_action in ('idle', 'Idle', ''):
             return py_trees.common.Status.SUCCESS
 
@@ -131,20 +203,87 @@ class CaptureImage(py_trees.behaviour.Behaviour):
         self._bb.register_key(key='/current_waypoint', access=py_trees.common.Access.READ)
         self._bb.register_key(key='/last_capture_path', access=py_trees.common.Access.WRITE)
 
+        if hasattr(self._node, '_service_audit'):
+            self._audit = self._node._service_audit
+        else:
+            self._audit = ServiceAuditPublisher(self._node)
+
         srv_name = self._node.get_parameter('ptz_capture_service').value
         self._client = self._node.create_client(CaptureImageSrv, srv_name)
         self._default_channel = int(self._node.get_parameter('default_ptz_channel').value)
         self._future = None
+        self._mock_start_time: float | None = None
+        self._mock_audit_sent = False
 
     def initialise(self) -> None:
         self._future = None
+        self._mock_start_time = time.monotonic()
+        self._mock_audit_sent = False
+        self._req_time: float | None = None
 
     def update(self) -> py_trees.common.Status:
+        wp = self._bb.get('/current_waypoint')
+
+        if is_debug_mock_enabled(self._node):
+            srv_name = self._node.get_parameter('ptz_capture_service').value
+            params = parse_task_params(wp)
+            if not self._mock_audit_sent:
+                self._mock_audit_sent = True
+                self._req_time = time.time()
+                self._audit.publish(
+                    service=srv_name,
+                    role='client',
+                    phase='request',
+                    request={
+                        'channel': int(params.get('channel', self._default_channel)),
+                        'url_type': 'localURL',
+                    },
+                    details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
+                )
+
+            def _on_success() -> None:
+                base_dir = str(self._node.get_parameter('debug_mock_capture_dir').value)
+                waypoint_id = wp.get('waypoint_id', 'mock_capture') if wp else 'mock_capture'
+                file_path = f'{base_dir.rstrip("/")}/{safe_slug(waypoint_id, fallback="capture")}.jpg'
+                self._bb.set('/last_capture_path', file_path)
+
+            mock_status = run_mock_action(
+                node=self._node,
+                start_time=self._mock_start_time,
+                result_parameter='debug_mock_capture_result',
+                on_success=_on_success,
+            )
+            if mock_status != py_trees.common.Status.RUNNING:
+                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+                mock_path = self._bb.get('/last_capture_path') if mock_status == py_trees.common.Status.SUCCESS else ''
+                self._audit.publish(
+                    service=srv_name,
+                    role='client',
+                    phase='response',
+                    response={'result': 1 if mock_status == py_trees.common.Status.SUCCESS else 0, 'file_path': mock_path},
+                    success=(mock_status == py_trees.common.Status.SUCCESS),
+                    duration_ms=duration,
+                    details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
+                )
+                self._node.get_logger().info(
+                    f'[DEBUG MOCK] CaptureImage -> {mock_status.name} wp={wp.get("waypoint_id", "?") if wp else "?"}'
+                )
+            return mock_status
+
         if self._future is not None:
             if not self._future.done():
                 return py_trees.common.Status.RUNNING
             try:
                 result = self._future.result()
+                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+                self._audit.publish(
+                    service=self._node.get_parameter('ptz_capture_service').value,
+                    role='client',
+                    phase='response',
+                    response={'result': int(result.result), 'file_path': str(result.file_path), 'message': str(result.message)},
+                    success=(result.result == 1),
+                    duration_ms=duration,
+                )
                 if result.result == 1:
                     self._bb.set('/last_capture_path', result.file_path)
                     self._node.get_logger().info(f'Capture saved: {result.file_path}')
@@ -152,6 +291,15 @@ class CaptureImage(py_trees.behaviour.Behaviour):
                 self._node.get_logger().warning(f'Capture failed: {result.message}')
                 return py_trees.common.Status.FAILURE
             except Exception as exc:
+                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+                self._audit.publish(
+                    service=self._node.get_parameter('ptz_capture_service').value,
+                    role='client',
+                    phase='response',
+                    success=False,
+                    duration_ms=duration,
+                    details={'error': str(exc)},
+                )
                 self._node.get_logger().error(f'Capture exception: {exc}')
                 return py_trees.common.Status.FAILURE
 
@@ -159,13 +307,19 @@ class CaptureImage(py_trees.behaviour.Behaviour):
             self._node.get_logger().warning('capture_image service not ready')
             return py_trees.common.Status.RUNNING
 
-        wp = self._bb.get('/current_waypoint')
-        params = PtzGotoPreset._parse_task_params(wp)
+        params = parse_task_params(wp)
 
         req = CaptureImageSrv.Request()
         req.channel = int(params.get('channel', self._default_channel))
         req.url_type = 'localURL'
 
         self._node.get_logger().info(f'Capture image: ch={req.channel}')
+        self._req_time = time.time()
+        self._audit.publish(
+            service=self._node.get_parameter('ptz_capture_service').value,
+            role='client',
+            phase='request',
+            request={'channel': int(req.channel), 'url_type': str(req.url_type)},
+        )
         self._future = self._client.call_async(req)
         return py_trees.common.Status.RUNNING

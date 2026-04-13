@@ -26,11 +26,22 @@ from __future__ import annotations
 
 import json
 import threading
+import time
+from pathlib import Path
 from typing import Any
 
 import py_trees
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+
+try:
+    from py_trees_ros.visitors import TreeToMsgVisitor
+    from py_trees_ros_interfaces.msg import BehaviourTree as BehaviourTreeMsg
+    _HAS_PY_TREES_ROS = True
+except ImportError:
+    _HAS_PY_TREES_ROS = False
 
 from rhw_msgs.msg import MissionStatus, WaypointTask
 from rhw_msgs.srv import GetWaypoints, PauseMission, StartMission, StopMission
@@ -45,6 +56,8 @@ from rhw_task_scheduler.bt_actions.condition_nodes import (
 from rhw_task_scheduler.bt_actions.inference_action import TriggerInference
 from rhw_task_scheduler.bt_actions.navigate_action import CancelNavigation, NavigateToGoal
 from rhw_task_scheduler.bt_actions.ptz_actions import CaptureImage, PtzGotoPreset, WaitPtzStable
+from rhw_task_scheduler.debug_tools import safe_slug
+from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
 
 class MissionBtNode(Node):
@@ -55,6 +68,8 @@ class MissionBtNode(Node):
         self._declare_parameters()
         self._read_parameters()
 
+        self._callback_group = ReentrantCallbackGroup()
+
         # ---- 状态 ----
         self._mission_running = False
         self._mission_paused = False
@@ -63,21 +78,54 @@ class MissionBtNode(Node):
         self._completed_count = 0
         self._bt: py_trees.trees.BehaviourTree | None = None
         self._bt_lock = threading.Lock()
+        self._tick_count = 0
+        self._last_root_status: py_trees.common.Status | None = None
 
         # ---- 发布器 ----
         self._status_pub = self.create_publisher(
             MissionStatus, self._mission_status_topic, 10
         )
+        self._service_audit = ServiceAuditPublisher(self)
+
+        # ---- py_trees_ros 实时可视化 ----
+        self._tree_msg_visitor: TreeToMsgVisitor | None = None
+        self._tree_snapshot_pub = None
+        if _HAS_PY_TREES_ROS:
+            self._tree_msg_visitor = TreeToMsgVisitor()
+            self._tree_snapshot_pub = self.create_publisher(
+                BehaviourTreeMsg, '~/snapshots', 2
+            )
+            self.get_logger().info(
+                'py_trees_ros snapshot publisher enabled on '
+                f'{self.get_name()}/snapshots'
+            )
 
         # ---- Service Clients ----
         self._get_waypoints_client = self.create_client(
-            GetWaypoints, self._get_waypoints_service
+            GetWaypoints,
+            self._get_waypoints_service,
+            callback_group=self._callback_group,
         )
 
         # ---- Service Servers ----
-        self.create_service(StartMission, '/mission/start', self._handle_start)
-        self.create_service(StopMission, '/mission/stop', self._handle_stop)
-        self.create_service(PauseMission, '/mission/pause', self._handle_pause)
+        self.create_service(
+            StartMission,
+            '/mission/start',
+            self._handle_start,
+            callback_group=self._callback_group,
+        )
+        self.create_service(
+            StopMission,
+            '/mission/stop',
+            self._handle_stop,
+            callback_group=self._callback_group,
+        )
+        self.create_service(
+            PauseMission,
+            '/mission/pause',
+            self._handle_pause,
+            callback_group=self._callback_group,
+        )
 
         # ---- Blackboard 初始化 ----
         self._bb = py_trees.blackboard.Client(name='MissionBtNode')
@@ -99,13 +147,22 @@ class MissionBtNode(Node):
 
         # ---- 行为树 tick 定时器 ----
         self._tick_timer = self.create_timer(
-            1.0 / self._bt_tick_rate_hz, self._tick_bt
+            1.0 / self._bt_tick_rate_hz,
+            self._tick_bt,
+            callback_group=self._callback_group,
         )
 
         # ---- 状态发布定时器 ----
-        self._status_timer = self.create_timer(1.0, self._publish_status)
+        self._status_timer = self.create_timer(
+            1.0,
+            self._publish_status,
+            callback_group=self._callback_group,
+        )
 
         self.get_logger().info('mission_bt_node started')
+        self.get_logger().info(
+            f'service audit publisher enabled on {self._service_audit.topic}'
+        )
 
     # ================================================================
     #  参数声明与读取
@@ -134,6 +191,21 @@ class MissionBtNode(Node):
         self.declare_parameter('mqtt_mission_status_topic', 'rhw/mission/status')
         self.declare_parameter('mission_status_topic', '/mission/status')
         self.declare_parameter('get_waypoints_service', '/waypoint_manager/get_waypoints')
+        self.declare_parameter('debug_mock_enabled', False)
+        self.declare_parameter('debug_mock_delay_sec', 5)
+        self.declare_parameter('debug_mock_nav_result', 'success')
+        self.declare_parameter('debug_mock_ptz_result', 'success')
+        self.declare_parameter('debug_mock_capture_result', 'success')
+        self.declare_parameter('debug_mock_charge_result', 'success')
+        self.declare_parameter('debug_mock_inference_result', 'success')
+        self.declare_parameter('debug_mock_battery_level', 100.0)
+        self.declare_parameter('debug_mock_capture_dir', '/tmp/rhw_task_scheduler_mock_captures')
+        self.declare_parameter('debug_print_tree_on_build', True)
+        self.declare_parameter('debug_print_tree_on_tick', False)
+        self.declare_parameter('debug_tree_show_status', True)
+        self.declare_parameter('debug_tree_log_every_n_ticks', 1)
+        self.declare_parameter('debug_export_tree_dot', False)
+        self.declare_parameter('debug_tree_output_dir', '/tmp/rhw_task_scheduler_bt')
 
     def _read_parameters(self) -> None:
         self._bt_tick_rate_hz = float(self.get_parameter('bt_tick_rate_hz').value)
@@ -146,6 +218,14 @@ class MissionBtNode(Node):
         self._mqtt_status_topic = str(self.get_parameter('mqtt_mission_status_topic').value)
         self._mission_status_topic = str(self.get_parameter('mission_status_topic').value)
         self._get_waypoints_service = str(self.get_parameter('get_waypoints_service').value)
+        self._debug_print_tree_on_build = bool(self.get_parameter('debug_print_tree_on_build').value)
+        self._debug_print_tree_on_tick = bool(self.get_parameter('debug_print_tree_on_tick').value)
+        self._debug_tree_show_status = bool(self.get_parameter('debug_tree_show_status').value)
+        self._debug_tree_log_every_n_ticks = max(int(self.get_parameter('debug_tree_log_every_n_ticks').value), 1)
+        self._debug_export_tree_dot = bool(self.get_parameter('debug_export_tree_dot').value)
+        self._debug_tree_output_dir = Path(
+            str(self.get_parameter('debug_tree_output_dir').value)
+        ).expanduser()
 
     # ================================================================
     #  MQTT
@@ -209,9 +289,25 @@ class MissionBtNode(Node):
     def _handle_start(
         self, request: StartMission.Request, response: StartMission.Response
     ) -> StartMission.Response:
+        started_at = time.monotonic()
+        self._service_audit.publish(
+            service='/mission/start',
+            role='server',
+            phase='request',
+            request=request,
+        )
         if self._mission_running:
             response.result = 0
             response.message = 'Mission already running, stop first'
+            self._service_audit.publish(
+                service='/mission/start',
+                role='server',
+                phase='response',
+                request=request,
+                response=response,
+                success=False,
+                duration_ms=(time.monotonic() - started_at) * 1000.0,
+            )
             return response
 
         map_name = request.map_name
@@ -220,27 +316,77 @@ class MissionBtNode(Node):
         if not map_name or not waypoint_ids:
             response.result = 0
             response.message = 'map_name and waypoint_ids are required'
+            self._service_audit.publish(
+                service='/mission/start',
+                role='server',
+                phase='response',
+                request=request,
+                response=response,
+                success=False,
+                duration_ms=(time.monotonic() - started_at) * 1000.0,
+            )
             return response
 
         ok, msg = self._start_mission(map_name, waypoint_ids)
         response.result = 1 if ok else 0
         response.message = msg
+        self._service_audit.publish(
+            service='/mission/start',
+            role='server',
+            phase='response',
+            request=request,
+            response=response,
+            success=ok,
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+        )
         return response
 
     def _handle_stop(
         self, request: StopMission.Request, response: StopMission.Response
     ) -> StopMission.Response:
+        started_at = time.monotonic()
+        self._service_audit.publish(
+            service='/mission/stop',
+            role='server',
+            phase='request',
+            request=request,
+        )
         self._stop_mission()
         response.result = 1
         response.message = 'Mission stopped'
+        self._service_audit.publish(
+            service='/mission/stop',
+            role='server',
+            phase='response',
+            request=request,
+            response=response,
+            success=True,
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+        )
         return response
 
     def _handle_pause(
         self, request: PauseMission.Request, response: PauseMission.Response
     ) -> PauseMission.Response:
+        started_at = time.monotonic()
+        self._service_audit.publish(
+            service='/mission/pause',
+            role='server',
+            phase='request',
+            request=request,
+        )
         if not self._mission_running:
             response.result = 0
             response.message = 'No mission running'
+            self._service_audit.publish(
+                service='/mission/pause',
+                role='server',
+                phase='response',
+                request=request,
+                response=response,
+                success=False,
+                duration_ms=(time.monotonic() - started_at) * 1000.0,
+            )
             return response
 
         self._mission_paused = request.pause
@@ -248,6 +394,15 @@ class MissionBtNode(Node):
         self.get_logger().info(f'Mission {state}')
         response.result = 1
         response.message = f'Mission {state}'
+        self._service_audit.publish(
+            service='/mission/pause',
+            role='server',
+            phase='response',
+            request=request,
+            response=response,
+            success=True,
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+        )
         return response
 
     # ================================================================
@@ -258,17 +413,67 @@ class MissionBtNode(Node):
         """获取航点详情并启动行为树."""
         # 同步调用 GetWaypoints
         if not self._get_waypoints_client.service_is_ready():
+            self._service_audit.publish(
+                service=self._get_waypoints_service,
+                role='client',
+                phase='response',
+                request={'map_name': map_name},
+                success=False,
+                details={'reason': 'service_not_ready'},
+            )
             return False, 'GetWaypoints service not ready'
 
         req = GetWaypoints.Request()
         req.map_name = map_name
+        started_at = time.monotonic()
+        self._service_audit.publish(
+            service=self._get_waypoints_service,
+            role='client',
+            phase='request',
+            request=req,
+            details={'waypoint_ids': waypoint_ids},
+        )
         future = self._get_waypoints_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
 
-        if not future.done():
-            return False, 'GetWaypoints service timeout'
+        # 使用非阻塞轮询等待，避免 spin_until_future_complete 阻塞 executor
+        deadline = time.monotonic() + 5.0
+        while not future.done():
+            if time.monotonic() > deadline:
+                self._service_audit.publish(
+                    service=self._get_waypoints_service,
+                    role='client',
+                    phase='response',
+                    request=req,
+                    success=False,
+                    duration_ms=(time.monotonic() - started_at) * 1000.0,
+                    details={'reason': 'timeout', 'waypoint_ids': waypoint_ids},
+                )
+                return False, 'GetWaypoints service timeout'
+            time.sleep(0.05)
+
+        if future.exception() is not None:
+            self._service_audit.publish(
+                service=self._get_waypoints_service,
+                role='client',
+                phase='response',
+                request=req,
+                success=False,
+                duration_ms=(time.monotonic() - started_at) * 1000.0,
+                details={'reason': 'exception', 'error': str(future.exception())},
+            )
+            return False, f'GetWaypoints call error: {future.exception()}'
 
         result = future.result()
+        self._service_audit.publish(
+            service=self._get_waypoints_service,
+            role='client',
+            phase='response',
+            request=req,
+            response=result,
+            success=(result.result == 1),
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+            details={'waypoint_ids': waypoint_ids},
+        )
         if result.result != 1:
             return False, f'GetWaypoints failed: {result.message}'
 
@@ -307,6 +512,8 @@ class MissionBtNode(Node):
         self._waypoint_queue.clear()
         self._current_index = 0
         self._completed_count = 0
+        self._tick_count = 0
+        self._last_root_status = None
         self.get_logger().info('Mission stopped')
 
     def _setup_current_waypoint(self) -> None:
@@ -321,6 +528,9 @@ class MissionBtNode(Node):
         tree = self._build_waypoint_tree()
         with self._bt_lock:
             self._bt = py_trees.trees.BehaviourTree(root=tree)
+
+        self._maybe_print_tree(tree, reason='build')
+        self._maybe_export_tree(tree)
 
     def _advance_to_next_waypoint(self) -> bool:
         """前进到下一个航点，返回 False 表示任务完成."""
@@ -395,6 +605,7 @@ class MissionBtNode(Node):
             bt = self._bt
 
         if bt is None:
+            self.get_logger().warning('_tick_bt: bt is None but mission_running=True', throttle_duration_sec=5.0)
             return
 
         try:
@@ -404,7 +615,18 @@ class MissionBtNode(Node):
             self._stop_mission()
             return
 
+        self._tick_count += 1
         root_status = bt.root.status
+
+        # 发布树快照供 py_trees_ros_viewer 实时可视化
+        self._publish_tree_snapshot(bt.root)
+
+        if root_status != self._last_root_status:
+            self.get_logger().info(f'BT root status -> {root_status.name}')
+            self._last_root_status = root_status
+
+        if self._debug_print_tree_on_tick and (self._tick_count % self._debug_tree_log_every_n_ticks == 0):
+            self._maybe_print_tree(bt.root, reason=f'tick#{self._tick_count}')
 
         if root_status == py_trees.common.Status.SUCCESS:
             wp = self._waypoint_queue[self._current_index]
@@ -413,6 +635,7 @@ class MissionBtNode(Node):
                 f'({self._completed_count + 1}/{len(self._waypoint_queue)})'
             )
             if not self._advance_to_next_waypoint():
+                self._publish_tree_snapshot(bt.root)  # 最终快照
                 self._mission_running = False
                 self.get_logger().info('Mission completed — all waypoints done')
 
@@ -422,8 +645,25 @@ class MissionBtNode(Node):
                 f'Waypoint failed: {wp.get("waypoint_id", "?")}, skipping'
             )
             if not self._advance_to_next_waypoint():
+                self._publish_tree_snapshot(bt.root)  # 最终快照
                 self._mission_running = False
                 self.get_logger().info('Mission completed (with failures)')
+
+    # ================================================================
+    #  树快照发布 (py_trees_ros_viewer)
+    # ================================================================
+
+    def _publish_tree_snapshot(self, root: py_trees.behaviour.Behaviour) -> None:
+        """将行为树状态序列化为 BehaviourTree 消息发布，供 viewer 实时展示."""
+        if self._tree_msg_visitor is None or self._tree_snapshot_pub is None:
+            return
+        try:
+            self._tree_msg_visitor.initialise()
+            for node in root.iterate():
+                self._tree_msg_visitor.run(node)
+            self._tree_snapshot_pub.publish(self._tree_msg_visitor.tree)
+        except Exception as exc:
+            self.get_logger().debug(f'Snapshot publish error: {exc}')
 
     # ================================================================
     #  状态发布
@@ -478,6 +718,37 @@ class MissionBtNode(Node):
             'task_params': wp.task_params,
         }
 
+    def _maybe_print_tree(self, tree_root: py_trees.behaviour.Behaviour, *, reason: str) -> None:
+        if not self._debug_print_tree_on_build and not self._debug_print_tree_on_tick:
+            return
+        try:
+            tree_text = py_trees.display.unicode_tree(
+                root=tree_root,
+                show_status=self._debug_tree_show_status,
+            )
+            self.get_logger().info(f'BT tree ({reason}):\n{tree_text}')
+        except Exception as exc:
+            self.get_logger().warning(f'Failed to print BT tree: {exc}')
+
+    def _maybe_export_tree(self, tree_root: py_trees.behaviour.Behaviour) -> None:
+        if not self._debug_export_tree_dot:
+            return
+        try:
+            self._debug_tree_output_dir.mkdir(parents=True, exist_ok=True)
+            waypoint_id = ''
+            if self._waypoint_queue and self._current_index < len(self._waypoint_queue):
+                waypoint_id = self._waypoint_queue[self._current_index].get('waypoint_id', '')
+            base_name = safe_slug(f'waypoint_{self._current_index}_{waypoint_id}', fallback='waypoint_tree')
+            outputs = py_trees.display.render_dot_tree(
+                root=tree_root,
+                name=base_name,
+                target_directory=str(self._debug_tree_output_dir),
+                with_blackboard_variables=True,
+            )
+            self.get_logger().info(f'BT dot exported: {outputs}')
+        except Exception as exc:
+            self.get_logger().warning(f'Failed to export BT dot tree: {exc}')
+
     def destroy_node(self) -> bool:
         if self._mqtt_client is not None:
             try:
@@ -491,10 +762,13 @@ class MissionBtNode(Node):
 def main() -> None:
     rclpy.init()
     node = MissionBtNode()
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()

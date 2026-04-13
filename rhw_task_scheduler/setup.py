@@ -12,7 +12,7 @@ setup(
         ('share/' + package_name + '/config', ['config/task_scheduler.yaml']),
         ('share/' + package_name + '/launch', ['launch/task_scheduler.launch.py']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'py_trees', 'paho-mqtt'],
     zip_safe=True,
     maintainer='xwqf',
     maintainer_email='xwqf@todo.todo',
@@ -22,6 +22,9 @@ setup(
         'console_scripts': [
             'waypoint_manager = rhw_task_scheduler.waypoint_manager:main',
             'mission_bt_node = rhw_task_scheduler.mission_bt_node:main',
+            'mock_mission_runner = rhw_task_scheduler.mock_mission_runner:main',
+            'mock_service_responder = rhw_task_scheduler.mock_service_responder:main',
+            'bt_web_viewer = rhw_task_scheduler.bt_web_viewer:main',
         ],
     },
 )

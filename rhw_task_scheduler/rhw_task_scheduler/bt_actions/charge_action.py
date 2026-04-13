@@ -5,12 +5,15 @@ Recharge: 调用 Recharge.srv 进行自动回充。
 from __future__ import annotations
 
 import math
+import time
 
 import py_trees
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 
 from rhw_msgs.srv import Recharge as RechargeSrv
+from rhw_task_scheduler.debug_tools import is_debug_mock_enabled, run_mock_action
+from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
 
 class Recharge(py_trees.behaviour.Behaviour):
@@ -26,25 +29,96 @@ class Recharge(py_trees.behaviour.Behaviour):
         self._bb = self.attach_blackboard_client()
         self._bb.register_key(key='/current_waypoint', access=py_trees.common.Access.READ)
 
+        if hasattr(self._node, '_service_audit'):
+            self._audit = self._node._service_audit
+        else:
+            self._audit = ServiceAuditPublisher(self._node)
+
         srv_name = self._node.get_parameter('recharge_service').value
         self._client = self._node.create_client(RechargeSrv, srv_name)
         self._future = None
+        self._mock_start_time: float | None = None
+        self._mock_audit_sent = False
 
     def initialise(self) -> None:
         self._future = None
+        self._mock_start_time = time.monotonic()
+        self._mock_audit_sent = False
+        self._req_time: float | None = None
 
     def update(self) -> py_trees.common.Status:
+        wp = self._bb.get('/current_waypoint')
+
+        if is_debug_mock_enabled(self._node):
+            srv_name = self._node.get_parameter('recharge_service').value
+            if not self._mock_audit_sent:
+                self._mock_audit_sent = True
+                self._req_time = time.time()
+                pose = wp.get('pose', {}) if wp else {}
+                self._audit.publish(
+                    service=srv_name,
+                    role='client',
+                    phase='request',
+                    request={
+                        'recharge_goal': {
+                            'x': float(pose.get('x', 0.0)),
+                            'y': float(pose.get('y', 0.0)),
+                            'theta': float(pose.get('theta', 0.0)),
+                        },
+                    },
+                    details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
+                )
+
+            mock_status = run_mock_action(
+                node=self._node,
+                start_time=self._mock_start_time,
+                result_parameter='debug_mock_charge_result',
+            )
+            if mock_status != py_trees.common.Status.RUNNING:
+                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+                self._audit.publish(
+                    service=srv_name,
+                    role='client',
+                    phase='response',
+                    response={'result': 0 if mock_status == py_trees.common.Status.SUCCESS else -1},
+                    success=(mock_status == py_trees.common.Status.SUCCESS),
+                    duration_ms=duration,
+                    details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
+                )
+                self._node.get_logger().info(
+                    f'[DEBUG MOCK] Recharge -> {mock_status.name} wp={wp.get("waypoint_id", "?") if wp else "?"}'
+                )
+            return mock_status
+
         if self._future is not None:
             if not self._future.done():
                 return py_trees.common.Status.RUNNING
             try:
                 result = self._future.result()
+                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+                self._audit.publish(
+                    service=self._node.get_parameter('recharge_service').value,
+                    role='client',
+                    phase='response',
+                    response={'result': int(result.result)},
+                    success=(result.result >= 0),
+                    duration_ms=duration,
+                )
                 if result.result >= 0:
                     self._node.get_logger().info('Recharge succeeded')
                     return py_trees.common.Status.SUCCESS
                 self._node.get_logger().warning(f'Recharge failed: result={result.result}')
                 return py_trees.common.Status.FAILURE
             except Exception as exc:
+                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+                self._audit.publish(
+                    service=self._node.get_parameter('recharge_service').value,
+                    role='client',
+                    phase='response',
+                    success=False,
+                    duration_ms=duration,
+                    details={'error': str(exc)},
+                )
                 self._node.get_logger().error(f'Recharge exception: {exc}')
                 return py_trees.common.Status.FAILURE
 
@@ -67,5 +141,18 @@ class Recharge(py_trees.behaviour.Behaviour):
         req.recharge_goal = goal
 
         self._node.get_logger().info('Sending recharge request')
+        self._req_time = time.time()
+        self._audit.publish(
+            service=self._node.get_parameter('recharge_service').value,
+            role='client',
+            phase='request',
+            request={
+                'recharge_goal': {
+                    'x': goal.pose.position.x,
+                    'y': goal.pose.position.y,
+                    'theta': theta,
+                },
+            },
+        )
         self._future = self._client.call_async(req)
         return py_trees.common.Status.RUNNING

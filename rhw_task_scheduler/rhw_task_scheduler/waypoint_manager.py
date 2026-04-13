@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -17,6 +18,7 @@ from rclpy.node import Node
 
 from rhw_msgs.msg import WaypointTask
 from rhw_msgs.srv import AddWaypoint, DeleteWaypoint, GetWaypoints
+from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
 
 class WaypointManagerNode(Node):
@@ -45,6 +47,7 @@ class WaypointManagerNode(Node):
         self._load_all()
 
         # ---- Services ----
+        self._service_audit = ServiceAuditPublisher(self)
         self.create_service(AddWaypoint, add_srv, self._handle_add)
         self.create_service(DeleteWaypoint, del_srv, self._handle_delete)
         self.create_service(GetWaypoints, get_srv, self._handle_get)
@@ -52,6 +55,9 @@ class WaypointManagerNode(Node):
         self.get_logger().info(
             f'waypoint_manager started  storage={self._storage_dir}  '
             f'maps_loaded={len(self._waypoints)}'
+        )
+        self.get_logger().info(
+            f'service audit publisher enabled on {self._service_audit.topic}'
         )
 
     # ================================================================
@@ -130,6 +136,13 @@ class WaypointManagerNode(Node):
     def _handle_add(
         self, request: AddWaypoint.Request, response: AddWaypoint.Response
     ) -> AddWaypoint.Response:
+        started_at = time.monotonic()
+        self._service_audit.publish(
+            service='/waypoint_manager/add_waypoint',
+            role='server',
+            phase='request',
+            request=request,
+        )
         wp = request.waypoint
         map_name = wp.map_name
         wid = wp.waypoint_id
@@ -137,10 +150,28 @@ class WaypointManagerNode(Node):
         if not map_name:
             response.result = 0
             response.message = 'map_name is required'
+            self._service_audit.publish(
+                service='/waypoint_manager/add_waypoint',
+                role='server',
+                phase='response',
+                request=request,
+                response=response,
+                success=False,
+                duration_ms=(time.monotonic() - started_at) * 1000.0,
+            )
             return response
         if not wid:
             response.result = 0
             response.message = 'waypoint_id is required'
+            self._service_audit.publish(
+                service='/waypoint_manager/add_waypoint',
+                role='server',
+                phase='response',
+                request=request,
+                response=response,
+                success=False,
+                duration_ms=(time.monotonic() - started_at) * 1000.0,
+            )
             return response
 
         with self._lock:
@@ -150,6 +181,15 @@ class WaypointManagerNode(Node):
                 if existing.get('waypoint_id') == wid:
                     response.result = 0
                     response.message = f'waypoint_id "{wid}" already exists in map "{map_name}"'
+                    self._service_audit.publish(
+                        service='/waypoint_manager/add_waypoint',
+                        role='server',
+                        phase='response',
+                        request=request,
+                        response=response,
+                        success=False,
+                        duration_ms=(time.monotonic() - started_at) * 1000.0,
+                    )
                     return response
             wps.append(self._wp_to_dict(wp))
             self._save_map(map_name)
@@ -157,17 +197,42 @@ class WaypointManagerNode(Node):
         self.get_logger().info(f'Added waypoint {wid} to map {map_name}')
         response.result = 1
         response.message = 'ok'
+        self._service_audit.publish(
+            service='/waypoint_manager/add_waypoint',
+            role='server',
+            phase='response',
+            request=request,
+            response=response,
+            success=True,
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+        )
         return response
 
     def _handle_delete(
         self, request: DeleteWaypoint.Request, response: DeleteWaypoint.Response
     ) -> DeleteWaypoint.Response:
+        started_at = time.monotonic()
+        self._service_audit.publish(
+            service='/waypoint_manager/delete_waypoint',
+            role='server',
+            phase='request',
+            request=request,
+        )
         map_name = request.map_name
         wid = request.waypoint_id
 
         if not map_name or not wid:
             response.result = 0
             response.message = 'map_name and waypoint_id are required'
+            self._service_audit.publish(
+                service='/waypoint_manager/delete_waypoint',
+                role='server',
+                phase='response',
+                request=request,
+                response=response,
+                success=False,
+                duration_ms=(time.monotonic() - started_at) * 1000.0,
+            )
             return response
 
         with self._lock:
@@ -175,6 +240,15 @@ class WaypointManagerNode(Node):
             if wps is None:
                 response.result = 0
                 response.message = f'map "{map_name}" not found'
+                self._service_audit.publish(
+                    service='/waypoint_manager/delete_waypoint',
+                    role='server',
+                    phase='response',
+                    request=request,
+                    response=response,
+                    success=False,
+                    duration_ms=(time.monotonic() - started_at) * 1000.0,
+                )
                 return response
 
             original_len = len(wps)
@@ -183,6 +257,15 @@ class WaypointManagerNode(Node):
             if len(self._waypoints[map_name]) == original_len:
                 response.result = 0
                 response.message = f'waypoint_id "{wid}" not found in map "{map_name}"'
+                self._service_audit.publish(
+                    service='/waypoint_manager/delete_waypoint',
+                    role='server',
+                    phase='response',
+                    request=request,
+                    response=response,
+                    success=False,
+                    duration_ms=(time.monotonic() - started_at) * 1000.0,
+                )
                 return response
 
             self._save_map(map_name)
@@ -197,11 +280,27 @@ class WaypointManagerNode(Node):
         self.get_logger().info(f'Deleted waypoint {wid} from map {map_name}')
         response.result = 1
         response.message = 'ok'
+        self._service_audit.publish(
+            service='/waypoint_manager/delete_waypoint',
+            role='server',
+            phase='response',
+            request=request,
+            response=response,
+            success=True,
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+        )
         return response
 
     def _handle_get(
         self, request: GetWaypoints.Request, response: GetWaypoints.Response
     ) -> GetWaypoints.Response:
+        started_at = time.monotonic()
+        self._service_audit.publish(
+            service='/waypoint_manager/get_waypoints',
+            role='server',
+            phase='request',
+            request=request,
+        )
         map_name = request.map_name
 
         with self._lock:
@@ -216,6 +315,15 @@ class WaypointManagerNode(Node):
         response.result = 1
         response.waypoints = [self._dict_to_wp(d) for d in wps]
         response.message = f'{len(response.waypoints)} waypoints'
+        self._service_audit.publish(
+            service='/waypoint_manager/get_waypoints',
+            role='server',
+            phase='response',
+            request=request,
+            response=response,
+            success=True,
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+        )
         return response
 
 
