@@ -35,11 +35,17 @@ source install/setup.bash
 
 ## 启动
 
-### 一键启动（PTZ + 摄像头）
+### 一键启动（PTZ + 可见光 + 热成像）
 
 ```bash
 ros2 launch rhw_ptz_controller ptz_controller.launch.py
 ```
+
+默认会同时启动：
+
+- `ptz_controller_node`
+- `camera_publisher_node`（可见光，默认 `/Streaming/Channels/101`）
+- `thermal_camera_publisher_node`（热成像，默认 `/Streaming/Channels/201`）
 
 ### 单独启动
 
@@ -96,6 +102,19 @@ ros2 run rhw_ptz_controller camera_publisher_node
 | `qos_reliability` | string | `reliable` | `reliable` / `best_effort` |
 | `qos_depth` | int | `1` | 发布队列深度 |
 
+### thermal_camera_publisher_node 参数
+
+热成像发布节点与 `camera_publisher_node` 使用同一套参数结构，默认差异如下：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `rtsp_path` | string | `/Streaming/Channels/201` | 热成像码流 ID |
+| `frame_rate` | float | `15.0` | 热成像发布帧率 |
+| `image_topic` | string | `/camera/thermal/image_raw` | 热成像图像话题 |
+| `frame_id` | string | `thermal_camera_link` | 热成像 frame_id |
+| `output_width` | int | `0` | 保持热成像原始宽度 |
+| `output_height` | int | `0` | 保持热成像原始高度 |
+
 ---
 
 ## 服务接口
@@ -105,6 +124,14 @@ ros2 run rhw_ptz_controller camera_publisher_node
 ```bash
 ros2 service call /ptz/control rhw_msgs/srv/PtzControl \
   "{direction: 'left', speed: 40, channel: 1, duration_ms: 500}"
+
+# 连续左转：按下时发送
+ros2 service call /ptz/control rhw_msgs/srv/PtzControl \
+  "{direction: 'left', speed: 40, channel: 1, duration_ms: 0}"
+
+# 松开时停止
+ros2 service call /ptz/control rhw_msgs/srv/PtzControl \
+  "{direction: 'stop', speed: 40, channel: 1, duration_ms: 0}"
 ```
 
 支持方向：`left` `right` `up` `down` `leftup` `rightup` `leftdown` `rightdown` `zoomin` `zoomout` `stop`
@@ -121,6 +148,12 @@ ros2 service call /ptz/control rhw_msgs/srv/PtzControl \
 | `result` | int8 | 0=失败 1=成功 |
 | `execution_mode` | string | single / timed_auto_stop / continuous_until_manual_stop |
 | `message` | string | 结果说明 |
+
+控制逻辑说明：
+
+- `duration_ms > 0`：发送方向命令后，节点内部启动自动停止线程，形成“点击一次移动一小段”的脉冲控制。
+- `duration_ms = 0`：不自动停止，云台会持续运动，直到再次调用 `/ptz/control` 且 `direction='stop'`。
+- 因此如果前端要实现“按下连续运动，松开停止”，应在按下时发送方向命令且 `duration_ms=0`，在松开时发送 `stop`。
 
 ### /ptz/goto_preset — 跳转预置位
 
@@ -169,6 +202,10 @@ ros2 service call /ptz/get_position rhw_msgs/srv/PtzGetPosition \
 ros2 service call /ptz/capture_image rhw_msgs/srv/CaptureImage \
   "{channel: 101, url_type: 'localURL', channel_format: 'streamTrack', save_path: '/tmp/ptz_captures/cap_101.jpg', image_type: 'JPEG'}"
 
+# 热成像抓拍（码流 ID 201）
+ros2 service call /ptz/capture_image rhw_msgs/srv/CaptureImage \
+  "{channel: 201, url_type: 'localURL', channel_format: 'streamTrack', save_path: '/tmp/ptz_captures/thermal_201.jpg', image_type: 'JPEG'}"
+
 # 云端 URL 模式（设备需已配置图片服务器）
 ros2 service call /ptz/capture_image rhw_msgs/srv/CaptureImage \
   "{channel: 101, url_type: 'cloudURL', channel_format: 'streamTrack', save_path: '/tmp/ptz_captures/cap_cloud_101.jpg', image_type: 'JPEG'}"
@@ -176,7 +213,7 @@ ros2 service call /ptz/capture_image rhw_msgs/srv/CaptureImage \
 
 | 请求字段 | 类型 | 说明 |
 |---|---|---|
-| `channel` | uint8 | 通道号；普通通道可传 `1`，码流通道可传 `101/102` |
+| `channel` | uint8 | 通道号；普通通道可传 `1`，码流通道可传 `101/102/201` |
 | `url_type` | string | `localURL` 或 `cloudURL` |
 | `channel_format` | string | 留空表示普通通道；`streamTrack` 表示按码流 ID 抓图 |
 | `save_path` | string | 本地保存完整路径；留空则自动保存在 `capture_save_dir` |
@@ -195,7 +232,8 @@ ros2 service call /ptz/capture_image rhw_msgs/srv/CaptureImage \
 
 - `localURL`：优先使用同步快照接口 `GET /ISAPI/Streaming/channels/<channel>/picture`，直接返回 JPEG 并保存到本地；这是当前设备实测可用的推荐方式。
 - `cloudURL`：调用异步接口 `GET /ISAPI/Streaming/channels/<channel>/picture/async?...`，从返回的 `PictureData.url` 下载并保存；前提是设备已配置图片服务器。
-- `channel_format=streamTrack` 时，`channel` 可传 `101`、`102` 这类码流 ID；留空则按普通通道号处理。
+- `channel_format=streamTrack` 时，`channel` 可传 `101`、`102`、`201` 这类码流 ID；留空则按普通通道号处理。
+- 当 `localURL + channel_format=streamTrack` 用于码流抓拍时，节点会先尝试同步快照接口；若设备不支持，会自动回退到异步抓拍并下载保存，适合热成像流抓图。
 - 当前设备的抓拍能力接口仅声明支持 `imageType=JPEG` 和 `URLType=cloudURL`，因此本地保存模式采用同步快照接口兜底。
 
 ---
@@ -233,6 +271,21 @@ ros2 run rqt_image_view rqt_image_view
 # 或查看话题信息
 ros2 topic hz /camera/rgb/image_raw
 ros2 topic info /camera/rgb/image_raw
+```
+
+### /camera/thermal/image_raw — 热成像图像（sensor_msgs/Image）
+
+| 字段 | 说明 |
+|---|---|
+| `encoding` | `bgr8` |
+| `header.frame_id` | 可配置，默认 `thermal_camera_link` |
+| 帧率 | 可配置，默认 15 Hz |
+
+查看热成像图像：
+
+```bash
+ros2 topic hz /camera/thermal/image_raw
+ros2 topic info /camera/thermal/image_raw
 ```
 
 ---

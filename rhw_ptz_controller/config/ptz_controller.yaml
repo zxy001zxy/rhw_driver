@@ -32,3 +32,23 @@ camera_publisher_node:
     output_height: 1080                # 输出高度，0=保持原尺寸
     qos_reliability: "reliable"     # reliable(兼容 rqt 等) / best_effort(低延迟)
     qos_depth: 1                       # 发布队列深度，1=只保留最新帧
+
+thermal_camera_publisher_node:
+  ros__parameters:
+    camera_ip: "192.168.10.64"
+    rtsp_port: 554
+    rtsp_username: "admin"
+    rtsp_password: "rhw1314000"
+    rtsp_path: "/Streaming/Channels/201"
+    rtsp_url_override: ""
+    frame_rate: 15.0
+    image_topic: "/camera/thermal/image_raw"
+    frame_id: "thermal_camera_link"
+    reconnect_interval: 3.0
+    rtsp_transport: "tcp"
+    publish_compressed: true
+    jpeg_quality: 70
+    output_width: 0                    # 保持热成像原始分辨率
+    output_height: 0                   # 保持热成像原始分辨率
+    qos_reliability: "reliable"
+    qos_depth: 1

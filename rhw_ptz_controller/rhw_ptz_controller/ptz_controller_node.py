@@ -90,7 +90,7 @@ class PtzControllerNode(Node):
         direction = request.direction or 'stop'
         speed = int(request.speed) if request.speed else self._default_speed
         channel = int(request.channel) if request.channel else self._default_channel
-        duration_ms = int(request.duration_ms) if request.duration_ms else self._default_duration_ms
+        duration_ms = int(request.duration_ms)
 
         try:
             result = self._ptz.control(
@@ -260,11 +260,52 @@ class PtzControllerNode(Node):
     # ===================================================================
     #  /ptz/capture_image — 手动抓拍并保存
     # ===================================================================
+    def _capture_image_bytes(
+        self,
+        *,
+        channel: int,
+        url_type: str,
+        channel_format: str,
+        image_type: str,
+    ) -> tuple[dict, str, bytes]:
+        if url_type == 'localURL':
+            binary_result = self._ptz.capture_picture_binary(channel=channel)
+            binary_ok = bool(binary_result.get('ok'))
+            binary_data: bytes = binary_result.get('image_data', b'')
+            binary_url = str(binary_result.get('url') or '')
+
+            if binary_ok and binary_data:
+                return binary_result, binary_url, binary_data
+
+            if not channel_format:
+                return binary_result, binary_url, b''
+
+            self.get_logger().warn(
+                f'Binary capture failed for channel={channel}, retry async capture '
+                f'with channel_format={channel_format}'
+            )
+
+        capture_result = self._ptz.capture_picture(
+            channel=channel,
+            image_type=image_type,
+            url_type=url_type,
+            channel_format=channel_format,
+        )
+        capture_ok = bool(capture_result.get('ok'))
+        capture_url = str(capture_result.get('capture_url') or '')
+
+        if not capture_ok:
+            return capture_result, capture_url, b''
+
+        download_result = self._ptz.download_capture_url(capture_url=capture_url)
+        download_result['capture_url'] = capture_url
+        return download_result, capture_url, download_result.get('image_data', b'')
+
     def _handle_capture_image(
         self, request: CaptureImage.Request, response: CaptureImage.Response
     ) -> CaptureImage.Response:
         channel = int(request.channel) if request.channel else self._default_channel
-        image_type = 'JPEG'
+        image_type = request.image_type.strip() if request.image_type else 'JPEG'
         url_type = request.url_type.strip() if request.url_type else 'localURL'
         channel_format = request.channel_format.strip() if request.channel_format else ''
 
@@ -281,54 +322,26 @@ class PtzControllerNode(Node):
             if save_dir:
                 Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-            if url_type == 'localURL':
-                result = self._ptz.capture_picture_binary(channel=channel)
-                ok = bool(result.get('ok'))
-                response.capture_url = str(result.get('url') or '')
-                image_data: bytes = result.get('image_data', b'')
+            result, capture_url, image_data = self._capture_image_bytes(
+                channel=channel,
+                url_type=url_type,
+                channel_format=channel_format,
+                image_type=image_type,
+            )
+            ok = bool(result.get('ok'))
+            response.capture_url = capture_url
 
-                if not ok or not image_data:
-                    response.result = 0
-                    response.file_path = ''
-                    response.file_size = 0
-                    response.saved = False
-                    response.message = self._extract_message(result)
-                    return response
-            else:
-                result = self._ptz.capture_picture(
-                    channel=channel,
-                    image_type=image_type,
-                    url_type=url_type,
-                    channel_format=channel_format,
-                )
-                ok = bool(result.get('ok'))
-                response.capture_url = str(result.get('capture_url') or '')
-
-                if not ok:
-                    response.result = 0
-                    response.capture_url = ''
-                    response.file_path = ''
-                    response.file_size = 0
-                    response.saved = False
-                    message = self._extract_message(result)
-                    payload_keys = result.get('payload_keys')
-                    if payload_keys:
-                        message = f"{message}; payload_keys={payload_keys}"
-                    response.message = message
-                    return response
-
-                download_result = self._ptz.download_capture_url(
-                    capture_url=response.capture_url,
-                )
-                download_ok = bool(download_result.get('ok'))
-                image_data = download_result.get('image_data', b'')
-                if not download_ok or not image_data:
-                    response.result = 0
-                    response.file_path = ''
-                    response.file_size = 0
-                    response.saved = False
-                    response.message = self._extract_message(download_result)
-                    return response
+            if not ok or not image_data:
+                response.result = 0
+                response.file_path = ''
+                response.file_size = 0
+                response.saved = False
+                message = self._extract_message(result)
+                payload_keys = result.get('payload_keys')
+                if payload_keys:
+                    message = f"{message}; payload_keys={payload_keys}"
+                response.message = message
+                return response
 
             with open(save_path, 'wb') as f:
                 f.write(image_data)

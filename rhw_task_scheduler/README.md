@@ -52,6 +52,15 @@
 - `label`
 - `task_params`（JSON 字符串）
 
+视觉识别点的 `task_params` 现在可直接透传抓拍参数，例如：
+
+- `preset_id`：云台预置位 ID
+- `channel`：抓拍通道或码流 ID，如 `1`、`101`、`201`
+- `url_type`：`localURL` 或 `cloudURL`
+- `channel_format`：码流抓拍时传 `streamTrack`
+- `save_path`：抓拍图片保存路径
+- `image_type`：当前设备建议传 `JPEG`
+
 ### 2. 实施模块：`mission_bt_node`
 
 支持两种任务下发方式：
@@ -343,6 +352,21 @@ ros2 service call /waypoint_manager/add_waypoint rhw_msgs/srv/AddWaypoint "{
 }"
 ```
 
+热成像抓拍任务示例：
+
+```bash
+ros2 service call /waypoint_manager/add_waypoint rhw_msgs/srv/AddWaypoint "{
+  waypoint: {
+    waypoint_id: 'thermal_001',
+    map_name: 'factory_map',
+    pose: {x: 1.2, y: 3.4, theta: 0.0},
+    waypoint_type: 2,
+    label: '热成像检测点',
+    task_params: '{\"preset_id\":1,\"channel\":201,\"channel_format\":\"streamTrack\",\"url_type\":\"localURL\",\"save_path\":\"/tmp/ptz_captures/task_thermal_201.jpg\",\"image_type\":\"JPEG\",\"inference_type\":\"det\"}'
+  }
+}"
+```
+
 #### 查询地图点位
 
 ```bash
@@ -487,6 +511,8 @@ rhw_task_scheduler/
 - 增加任务执行记录与失败原因持久化
 - 增加“低电量自动插入充电航点”策略
 - 如后续任务复杂度继续提升，可扩展为多层行为树或插件式任务执行器
+
+
 
 # 终端1: 启动 mock 服务响应器
 ros2 run rhw_task_scheduler mock_service_responder

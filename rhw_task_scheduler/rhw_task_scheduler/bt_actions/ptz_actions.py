@@ -223,28 +223,42 @@ class CaptureImage(py_trees.behaviour.Behaviour):
 
     def update(self) -> py_trees.common.Status:
         wp = self._bb.get('/current_waypoint')
+        params = parse_task_params(wp)
 
         if is_debug_mock_enabled(self._node):
             srv_name = self._node.get_parameter('ptz_capture_service').value
-            params = parse_task_params(wp)
             if not self._mock_audit_sent:
                 self._mock_audit_sent = True
                 self._req_time = time.time()
+                request_payload = {
+                    'channel': int(params.get('channel', self._default_channel)),
+                    'url_type': str(params.get('url_type', 'localURL') or 'localURL'),
+                }
+                channel_format = str(params.get('channel_format', '') or '')
+                save_path = str(params.get('save_path', '') or '')
+                image_type = str(params.get('image_type', 'JPEG') or 'JPEG')
+                if channel_format:
+                    request_payload['channel_format'] = channel_format
+                if save_path:
+                    request_payload['save_path'] = save_path
+                if image_type:
+                    request_payload['image_type'] = image_type
                 self._audit.publish(
                     service=srv_name,
                     role='client',
                     phase='request',
-                    request={
-                        'channel': int(params.get('channel', self._default_channel)),
-                        'url_type': 'localURL',
-                    },
+                    request=request_payload,
                     details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
                 )
 
             def _on_success() -> None:
-                base_dir = str(self._node.get_parameter('debug_mock_capture_dir').value)
-                waypoint_id = wp.get('waypoint_id', 'mock_capture') if wp else 'mock_capture'
-                file_path = f'{base_dir.rstrip("/")}/{safe_slug(waypoint_id, fallback="capture")}.jpg'
+                requested_path = str(params.get('save_path', '') or '')
+                if requested_path:
+                    file_path = requested_path
+                else:
+                    base_dir = str(self._node.get_parameter('debug_mock_capture_dir').value)
+                    waypoint_id = wp.get('waypoint_id', 'mock_capture') if wp else 'mock_capture'
+                    file_path = f'{base_dir.rstrip("/")}/{safe_slug(waypoint_id, fallback="capture")}.jpg'
                 self._bb.set('/last_capture_path', file_path)
 
             mock_status = run_mock_action(
@@ -307,19 +321,30 @@ class CaptureImage(py_trees.behaviour.Behaviour):
             self._node.get_logger().warning('capture_image service not ready')
             return py_trees.common.Status.RUNNING
 
-        params = parse_task_params(wp)
-
         req = CaptureImageSrv.Request()
         req.channel = int(params.get('channel', self._default_channel))
-        req.url_type = 'localURL'
+        req.url_type = str(params.get('url_type', 'localURL') or 'localURL')
+        req.channel_format = str(params.get('channel_format', '') or '')
+        req.save_path = str(params.get('save_path', '') or '')
+        req.image_type = str(params.get('image_type', 'JPEG') or 'JPEG')
 
         self._node.get_logger().info(f'Capture image: ch={req.channel}')
         self._req_time = time.time()
+        request_payload = {
+            'channel': int(req.channel),
+            'url_type': str(req.url_type),
+        }
+        if req.channel_format:
+            request_payload['channel_format'] = str(req.channel_format)
+        if req.save_path:
+            request_payload['save_path'] = str(req.save_path)
+        if req.image_type:
+            request_payload['image_type'] = str(req.image_type)
         self._audit.publish(
             service=self._node.get_parameter('ptz_capture_service').value,
             role='client',
             phase='request',
-            request={'channel': int(req.channel), 'url_type': str(req.url_type)},
+            request=request_payload,
         )
         self._future = self._client.call_async(req)
         return py_trees.common.Status.RUNNING

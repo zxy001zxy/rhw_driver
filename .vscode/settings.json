@@ -1,0 +1,21 @@
+{
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python.defaultInterpreterPath": "/usr/bin/python3",
+    "python.analysis.extraPaths": [
+        "/home/zxy/.local/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/home/zxy/Desktop/project/rhw_ws/install/rhw_msgs/lib/python3.10/site-packages",
+        "/home/zxy/Desktop/project/rhw_ws/install/rhw_task_scheduler/lib/python3.10/site-packages",
+        "/home/zxy/Desktop/project/rhw_ws/src"
+    ],
+    "python.autoComplete.extraPaths": [
+        "/home/zxy/.local/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/home/zxy/Desktop/project/rhw_ws/install/rhw_msgs/lib/python3.10/site-packages",
+        "/home/zxy/Desktop/project/rhw_ws/install/rhw_task_scheduler/lib/python3.10/site-packages",
+        "/home/zxy/Desktop/project/rhw_ws/src"
+    ],
+    "python.terminal.activateEnvironment": true
+}

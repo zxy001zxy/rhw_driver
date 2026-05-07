@@ -19,17 +19,27 @@ udp_bridge_node:
     basic_command: 6
     packet_header: [235, 145, 235, 144]
     socket_timeout_sec: 0.5
+    debug_log_sender: false
 
 mqtt_forwarder_node:
   ros__parameters:
+    enabled: true
     broker_host: "127.0.0.1"
     broker_port: 1883
     client_id: "rhw_udp_mqtt_bridge"
-    source_topic: "/robot/basic_status"
-    mqtt_topic: "rhw/robot/basic_status"
-    enabled_topics:
-      - "/robot/basic_status"
-      - "/robot/motion_status"
-      - "/robot/battery_status"
-    qos: 0
+    username: ""
+    password: ""
+    mqtt_topic: "/robot-dog/DOG001/Upload/Data"
+    heartbeat_publish_period_sec: 1.0
+    status_timeout_sec: 3.0
+    default_signal_strength: -65
+    map_id: 1
+    keep_alive_sec: 60
+    basic_status_topic: "/robot/basic_status"
+    battery_status_topic: "/robot/battery_status"
+    robot_position_topic: "/robot_position"
+    mission_status_topic: "/mission/status"
+    qos: 1
     retain: false
+    debug_log_payload: false
+    missing_state_log_period_sec: 5.0

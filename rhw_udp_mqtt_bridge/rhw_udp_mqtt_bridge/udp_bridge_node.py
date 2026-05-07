@@ -21,7 +21,7 @@ class UdpBridgeNode(Node):
         self.declare_parameter('bind_port', 30000)
         self.declare_parameter('robot_host', '10.21.31.103')
         self.declare_parameter('robot_port', 30000)
-        self.declare_parameter('receive_filter_host', '10.21.41.1')
+        self.declare_parameter('receive_filter_host', '10.21.31.103')
         self.declare_parameter('receive_filter_port', 30000)
         self.declare_parameter('heartbeat_period_sec', 1.0)
         self.declare_parameter('heartbeat_type', 100)
@@ -36,6 +36,7 @@ class UdpBridgeNode(Node):
         self.declare_parameter('basic_command', 6)
         self.declare_parameter('packet_header', [235, 145, 235, 144])
         self.declare_parameter('socket_timeout_sec', 0.5)
+        self.declare_parameter('debug_log_sender', False)
 
         self._bind_host = str(self.get_parameter('bind_host').value)
         self._bind_port = int(self.get_parameter('bind_port').value)
@@ -56,6 +57,7 @@ class UdpBridgeNode(Node):
         self._basic_command = int(self.get_parameter('basic_command').value)
         self._packet_header = bytes(int(x) & 0xFF for x in self.get_parameter('packet_header').value)
         self._socket_timeout_sec = max(float(self.get_parameter('socket_timeout_sec').value), 0.1)
+        self._debug_log_sender = bool(self.get_parameter('debug_log_sender').value)
 
         self._basic_pub = self.create_publisher(UdpBasicStatus, self._basic_status_topic, 10)
         self._motion_pub = self.create_publisher(UdpMotionStatus, self._motion_status_topic, 10)
@@ -133,30 +135,66 @@ class UdpBridgeNode(Node):
             except OSError:
                 break
 
+            if self._debug_log_sender:
+                self.get_logger().info(
+                    f'Received UDP packet from {sender[0]}:{sender[1]} len={len(packet)}'
+                )
+
             if sender[0] != self._receive_filter_host or sender[1] != self._receive_filter_port:
+                if self._debug_log_sender:
+                    self.get_logger().info(
+                        'Ignored UDP packet due to sender filter: '
+                        f'expected {self._receive_filter_host}:{self._receive_filter_port}, '
+                        f'got {sender[0]}:{sender[1]}'
+                    )
                 continue
             if len(packet) < 16:
+                if self._debug_log_sender:
+                    self.get_logger().info('Ignored UDP packet: length < 16')
                 continue
             if packet[:4] != self._packet_header:
+                if self._debug_log_sender:
+                    self.get_logger().info(
+                        f'Ignored UDP packet: header mismatch got={list(packet[:4])}'
+                    )
                 continue
 
             asdu_len = packet[4] | (packet[5] << 8)
             if asdu_len <= 0 or (16 + asdu_len) > len(packet):
+                if self._debug_log_sender:
+                    self.get_logger().info(
+                        f'Ignored UDP packet: invalid asdu_len={asdu_len} total_len={len(packet)}'
+                    )
                 continue
 
             payload_text = packet[16:16 + asdu_len].decode('utf-8', errors='ignore')
             try:
                 payload = json.loads(payload_text)
             except json.JSONDecodeError:
+                if self._debug_log_sender:
+                    self.get_logger().info('Ignored UDP packet: JSON decode failed')
                 continue
 
             patrol_device = payload.get('PatrolDevice', {})
             if int(patrol_device.get('Type', -1)) != 1002:
+                if self._debug_log_sender:
+                    self.get_logger().info(
+                        f'Ignored UDP packet: PatrolDevice.Type={patrol_device.get("Type", None)} != 1002'
+                    )
                 continue
 
             command = int(patrol_device.get('Command', -1))
             if command not in (self._motion_command, self._battery_command, self._basic_command):
+                if self._debug_log_sender:
+                    self.get_logger().info(
+                        f'Ignored UDP packet: unsupported command={command}'
+                    )
                 continue
+
+            if self._debug_log_sender:
+                self.get_logger().info(
+                    f'Accepted UDP packet from {sender[0]}:{sender[1]} type=1002 command={command}'
+                )
 
             if command == self._motion_command:
                 self._publish_motion_status(payload)

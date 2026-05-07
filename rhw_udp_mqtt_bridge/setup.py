@@ -12,7 +12,7 @@ setup(
         ('share/' + package_name + '/launch', ['launch/udp_bridge.launch.py']),
         ('share/' + package_name + '/config', ['config/udp_mqtt_bridge.yaml']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'paho-mqtt'],
     zip_safe=True,
     maintainer='xwqf',
     maintainer_email='xwqf@todo.todo',
@@ -22,6 +22,7 @@ setup(
     entry_points={
         'console_scripts': [
             'udp_bridge_node = rhw_udp_mqtt_bridge.udp_bridge_node:main',
+            'mqtt_forwarder_node = rhw_udp_mqtt_bridge.mqtt_forwarder_node:main',
         ],
     },
 )

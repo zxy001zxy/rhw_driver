@@ -2,7 +2,18 @@
 from __future__ import annotations
 
 import os
+import site
+import sys
 import threading
+
+
+def _prefer_ros_system_site_packages() -> None:
+    user_site = site.getusersitepackages()
+    if user_site in sys.path:
+        sys.path.remove(user_site)
+
+
+_prefer_ros_system_site_packages()
 
 import cv2
 import rclpy
