@@ -14,7 +14,7 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         DeclareLaunchArgument(
             'enable_mqtt_forwarder',
-            default_value='false',
+            default_value='true',
             description='Whether to launch mqtt_forwarder_node together with udp_bridge_node',
         ),
         Node(

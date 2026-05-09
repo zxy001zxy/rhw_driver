@@ -93,6 +93,8 @@ class MqttForwarderNode(Node):
         self._last_missing_state_log_at = 0.0
         self._msg_id = 1
         self._mqtt_connected = False
+        self._received_topics: set[str] = set()
+        self._all_required_topics_reported = False
 
         self.create_subscription(
             UdpBasicStatus,
@@ -142,7 +144,7 @@ class MqttForwarderNode(Node):
             f'topic={self._mqtt_topic} timeout={self._status_timeout_sec:.1f}s'
         )
         self.get_logger().info(
-            'waiting topics: '
+            'subscribed topics: '
             f'{self._basic_status_topic}, {self._battery_status_topic}, '
             f'{self._robot_position_topic}, {self._mission_status_topic}'
         )
@@ -186,18 +188,31 @@ class MqttForwarderNode(Node):
     def _on_basic_status(self, msg: UdpBasicStatus) -> None:
         self._basic_status = msg
         self._basic_status_received_at = time.monotonic()
+        self._mark_topic_received(self._basic_status_topic)
 
     def _on_battery_status(self, msg: UdpBatteryStatus) -> None:
         self._battery_status = msg
         self._battery_status_received_at = time.monotonic()
+        self._mark_topic_received(self._battery_status_topic)
 
     def _on_robot_position(self, msg: RobotPosition) -> None:
         self._robot_position = msg
         self._robot_position_received_at = time.monotonic()
+        self._mark_topic_received(self._robot_position_topic)
 
     def _on_mission_status(self, msg: MissionStatus) -> None:
         self._mission_status = msg
         self._mission_status_received_at = time.monotonic()
+        self._mark_topic_received(self._mission_status_topic)
+
+    def _mark_topic_received(self, topic_name: str) -> None:
+        if topic_name not in self._received_topics:
+            self._received_topics.add(topic_name)
+            self.get_logger().info(f'Received first message on {topic_name}')
+
+        if not self._all_required_topics_reported and not self._missing_required_states():
+            self._all_required_topics_reported = True
+            self.get_logger().info('All required topics received, MQTT heartbeat publishing is unblocked')
 
     def _publish_heartbeat(self) -> None:
         if not self._enabled:

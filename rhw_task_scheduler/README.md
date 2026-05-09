@@ -43,23 +43,17 @@
 ~/.rhw/waypoints/<map_name>.json
 ```
 
+JSON 顶层保存当前地图名 `map_name` 和稳定唯一标识 `map_id`。
+
 每条点位记录包括：
 
 - `waypoint_id`
-- `map_name`
 - `pose(x, y, theta)`
 - `waypoint_type`
 - `label`
 - `task_params`（JSON 字符串）
 
-视觉识别点的 `task_params` 现在可直接透传抓拍参数，例如：
-
-- `preset_id`：云台预置位 ID
-- `channel`：抓拍通道或码流 ID，如 `1`、`101`、`201`
-- `url_type`：`localURL` 或 `cloudURL`
-- `channel_format`：码流抓拍时传 `streamTrack`
-- `save_path`：抓拍图片保存路径
-- `image_type`：当前设备建议传 `JPEG`
+当启用 `waypoint_manager` 的 MQTT 同步参数后，保存或删除点位后会主动将当前地图点位快照发布到 MQTT。
 
 ### 2. 实施模块：`mission_bt_node`
 
@@ -221,7 +215,8 @@ ros2 run rhw_task_scheduler mock_mission_runner
 
 1. 打开 `mission_bt_node` 的 mock 调试参数
 2. 删除旧的同名测试点位
-3. 写入三类测试点位：`normal_001`、`vision_001`、`charge_001`
+3. 在主地图写入测试点位：`normal_001`、`vision_001`、`charge_001`
+4. 默认额外写入一张虚拟地图 `room_map` 的测试点位，用于多地图点位同步联调
 4. 调用 `/mission/start` 启动任务
 
 说明：
@@ -231,16 +226,176 @@ ros2 run rhw_task_scheduler mock_mission_runner
 
 默认地图名为 `factory_map`。
 
+默认会额外写入次级地图 `room_map`。如不需要，可传入 `-p seed_secondary_map:=false`。
+
 如需改参数，可使用 ROS 参数覆盖，例如：
 
 ```bash
 ros2 run rhw_task_scheduler mock_mission_runner --ros-args \
   -p map_name:=demo_map \
+  -p secondary_map_name:=demo_room_map \
   -p mock_delay_sec:=1.0 \
   -p configure_tree_debug_params:=true \
   -p print_tree_on_tick:=true \
   -p export_tree_dot:=true
 ```
+
+## 启动说明
+
+以下命令默认在工作区根目录执行：
+
+```bash
+cd ~/Desktop/project/rhw_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+```
+
+### 1. 常规启动
+
+适用于通过 ROS 2 Service 管理点位和任务，不依赖 MQTT。
+
+启动命令：
+
+```bash
+ros2 launch rhw_task_scheduler task_scheduler.launch.py
+```
+
+启动后可直接通过以下接口联调：
+
+- 点位管理：`/waypoint_manager/add_waypoint`、`/waypoint_manager/delete_waypoint`、`/waypoint_manager/get_waypoints`
+- 任务控制：`/mission/start`、`/mission/pause`、`/mission/stop`
+- 状态话题：`/mission/status`
+
+### 2. 启动 Web 可视化
+
+如果需要行为树 Web 页面，启动时加上 `bt_viewer:=true`：
+
+```bash
+ros2 launch rhw_task_scheduler task_scheduler.launch.py bt_viewer:=true
+```
+
+浏览器访问：
+
+```text
+http://localhost:8765/
+```
+
+说明：
+
+- HTTP 端口默认 `8765`
+- WebSocket 端口默认 `8766`
+- 需要先安装 `py_trees_ros` 与 `py_trees_ros_interfaces`
+
+### 3. 启用点位 MQTT 主动同步
+
+如果需要在保存或删除点位后，通过 MQTT 主动同步当前地图点位快照，先修改 `config/task_scheduler.yaml` 中 `waypoint_manager` 的以下参数：
+
+- `mqtt_sync_enabled: true`
+- `mqtt_broker_host`
+- `mqtt_broker_port`
+- `mqtt_client_id`
+- `mqtt_username` / `mqtt_password`
+- `mqtt_waypoint_sync_topic`
+
+修改后重新启动：
+
+```bash
+ros2 launch rhw_task_scheduler task_scheduler.launch.py
+```
+
+当前点位同步是主动推送模式，触发时机如下：
+
+- `waypoint_manager` 连接到 MQTT broker 后，自动补发当前已保存点位；如果存在多张地图，会在同一条消息的 `message[]` 中返回多张地图快照
+- `add_waypoint` 成功后，发布当前地图点位快照
+- `delete_waypoint` 成功后，发布当前地图点位快照
+
+当前点位同步消息结构如下：
+
+- 顶层字段固定为 `type`、`method`、`code`、`msgid`、`message`
+- `message[]` 中每条记录表示一张地图，包含 `mapId`、`mapName`、`pointCount`、`pointId[]`、`pointName[]`
+
+### 4. 启用 MQTT 任务下发
+
+如果需要通过 MQTT 下发任务给 `mission_bt_node`，先修改 `config/task_scheduler.yaml` 中 `mission_bt_node` 的以下参数：
+
+- `mqtt_enabled: true`
+- `mqtt_broker_host`
+- `mqtt_broker_port`
+- `mqtt_client_id`
+- `mqtt_mission_start_topic`
+- `mqtt_mission_status_topic`
+
+修改后重新启动：
+
+```bash   
+ros2 launch rhw_task_scheduler task_scheduler.launch.py
+```
+
+默认 MQTT 任务下发 topic：
+
+```text
+rhw/mission/start
+```
+
+默认 MQTT 状态回传 topic：
+
+```text
+rhw/mission/status
+```
+
+### 5. Mock 联调启动
+
+适用于当前没有真实导航、云台、抓拍、充电服务，只验证调度链路。
+
+终端 1：启动 mock 服务响应器
+
+```bash
+ros2 run rhw_task_scheduler mock_service_responder
+```
+
+终端 2：启动调度系统
+
+```bash
+ros2 launch rhw_task_scheduler task_scheduler.launch.py bt_viewer:=true
+```
+
+终端 3：灌入测试点位并启动 mock 任务
+
+```bash
+ros2 run rhw_task_scheduler mock_mission_runner --ros-args -p enable_mock_params:=false
+```
+
+如果希望直接使用 `mission_bt_node` 内部 mock，而不是 mock 服务响应器，请把 `config/task_scheduler.yaml` 里的 `debug_mock_enabled` 改成 `true` 后再启动。
+
+### 6. 启动后检查项
+
+建议按下面顺序检查：
+
+1. 节点是否存在：
+
+```bash
+ros2 node list
+```
+
+2. 任务状态是否正常发布：
+
+```bash
+ros2 topic echo /mission/status
+```
+
+3. 服务审计是否正常发布：
+
+```bash
+ros2 topic echo /service_events
+```
+
+4. 如启用 Web 页面，确认浏览器可打开：
+
+```text
+http://localhost:8765/
+```
+
+5. 如启用点位 MQTT 同步或任务 MQTT，确认 broker 连通并检查对应 topic 是否有消息。
 
 ---
 
@@ -253,6 +408,15 @@ ros2 run rhw_task_scheduler mock_mission_runner --ros-args \
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `storage_dir` | `~/.rhw/waypoints` | 点位持久化目录 |
+| `mqtt_sync_enabled` | `false` | 是否启用点位 MQTT 主动同步 |
+| `mqtt_broker_host` | `127.0.0.1` | MQTT broker 地址 |
+| `mqtt_broker_port` | `1883` | MQTT broker 端口 |
+| `mqtt_client_id` | `rhw_waypoint_manager` | 点位同步 MQTT 客户端 ID |
+| `mqtt_username` | `""` | MQTT 用户名 |
+| `mqtt_password` | `""` | MQTT 密码 |
+| `mqtt_waypoint_sync_topic` | `/robot-dog/DOG001/Upload/Data` | 点位同步上报 topic |
+| `mqtt_qos` | `0` | 点位同步 MQTT QoS |
+| `mqtt_keep_alive_sec` | `60` | 点位同步 MQTT keep alive |
 | `add_waypoint_service` | `/waypoint_manager/add_waypoint` | 添加点位服务名 |
 | `delete_waypoint_service` | `/waypoint_manager/delete_waypoint` | 删除点位服务名 |
 | `get_waypoints_service` | `/waypoint_manager/get_waypoints` | 查询点位服务名 |
@@ -352,21 +516,6 @@ ros2 service call /waypoint_manager/add_waypoint rhw_msgs/srv/AddWaypoint "{
 }"
 ```
 
-热成像抓拍任务示例：
-
-```bash
-ros2 service call /waypoint_manager/add_waypoint rhw_msgs/srv/AddWaypoint "{
-  waypoint: {
-    waypoint_id: 'thermal_001',
-    map_name: 'factory_map',
-    pose: {x: 1.2, y: 3.4, theta: 0.0},
-    waypoint_type: 2,
-    label: '热成像检测点',
-    task_params: '{\"preset_id\":1,\"channel\":201,\"channel_format\":\"streamTrack\",\"url_type\":\"localURL\",\"save_path\":\"/tmp/ptz_captures/task_thermal_201.jpg\",\"image_type\":\"JPEG\",\"inference_type\":\"det\"}'
-  }
-}"
-```
-
 #### 查询地图点位
 
 ```bash
@@ -434,6 +583,43 @@ ros2 service call /mission/stop rhw_msgs/srv/StopMission "{}"
 ## MQTT 消息格式
 
 当 `mqtt_enabled=true` 时，`mission_bt_node` 会订阅任务下发 topic。
+
+### 点位主动同步说明
+
+当 `waypoint_manager.mqtt_sync_enabled=true` 时，`waypoint_manager` 会在以下时机主动发布点位同步消息：
+
+- 节点连接到 MQTT broker 后，自动补发当前已保存的所有地图点位快照
+- 调用 `/waypoint_manager/add_waypoint` 成功后，发布该地图当前点位快照
+- 调用 `/waypoint_manager/delete_waypoint` 成功后，发布该地图当前点位快照
+
+当前阶段仅支持主动同步，不通过平台触发响应式查询同步。
+
+当前点位同步消息示例结构：
+
+```json
+{
+  "type": "response",
+  "method": "map",
+  "code": 0,
+  "msgid": 1,
+  "message": [
+    {
+      "mapId": "9acb90d53c0d52b89d7f8a6ee4a19b85",
+      "mapName": "factory_map",
+      "pointCount": 2,
+      "pointId": ["P_A01", "P_A02"],
+      "pointName": ["大门口", "视觉点"]
+    },
+    {
+      "mapId": "6425dbf2b5665a62b5d8b3c7d6d8f0eb",
+      "mapName": "room_map",
+      "pointCount": 3,
+      "pointId": ["P_B01", "P_B02", "P_B03"],
+      "pointName": ["大门口", "视觉点", "视觉点2"]
+    }
+  ]
+}
+```
 
 ### 下发任务示例
 

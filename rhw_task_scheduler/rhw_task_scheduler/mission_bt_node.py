@@ -192,7 +192,7 @@ class MissionBtNode(Node):
         self.declare_parameter('mission_status_topic', '/mission/status')
         self.declare_parameter('get_waypoints_service', '/waypoint_manager/get_waypoints')
         self.declare_parameter('debug_mock_enabled', False)
-        self.declare_parameter('debug_mock_delay_sec', 5)
+        self.declare_parameter('debug_mock_delay_sec', 5.0)
         self.declare_parameter('debug_mock_nav_result', 'success')
         self.declare_parameter('debug_mock_ptz_result', 'success')
         self.declare_parameter('debug_mock_capture_result', 'success')

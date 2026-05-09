@@ -24,11 +24,11 @@ udp_bridge_node:
 mqtt_forwarder_node:
   ros__parameters:
     enabled: true
-    broker_host: "127.0.0.1"
+    broker_host: "8.130.34.168"
     broker_port: 1883
-    client_id: "rhw_udp_mqtt_bridge"
-    username: ""
-    password: ""
+    client_id: "robot-inspect-forwarder"
+    username: "admin"
+    password: "public"
     mqtt_topic: "/robot-dog/DOG001/Upload/Data"
     heartbeat_publish_period_sec: 1.0
     status_timeout_sec: 3.0

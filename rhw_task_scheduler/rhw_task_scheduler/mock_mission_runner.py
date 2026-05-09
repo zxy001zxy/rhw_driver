@@ -3,7 +3,7 @@
 用途：
 1. 可选地打开 `mission_bt_node` 的 mock 调试参数。
 2. 删除同名旧测试点位。
-3. 写入一组默认测试点位（普通点 / 视觉点 / 充电点）。
+3. 写入主地图测试点位，并可额外写入一张虚拟地图的点位快照。
 4. 调用 `/mission/start` 启动任务。
 
 运行方式：
@@ -88,6 +88,35 @@ DEFAULT_SEEDS: tuple[WaypointSeed, ...] = (
     ),
 )
 
+SECONDARY_SEEDS: tuple[WaypointSeed, ...] = (
+    WaypointSeed(
+        waypoint_id='room_normal_001',
+        x=0.5,
+        y=0.5,
+        theta=0.0,
+        waypoint_type=WaypointTask.TYPE_NORMAL,
+        label='房间导航点A',
+    ),
+    WaypointSeed(
+        waypoint_id='room_vision_001',
+        x=1.5,
+        y=0.8,
+        theta=0.0,
+        waypoint_type=WaypointTask.TYPE_VISION,
+        label='房间视觉点A',
+        task_params='{"preset_id":3,"channel":1,"inference_type":"det"}',
+    ),
+    WaypointSeed(
+        waypoint_id='room_vision_002',
+        x=2.2,
+        y=1.1,
+        theta=1.57,
+        waypoint_type=WaypointTask.TYPE_VISION,
+        label='房间视觉点B',
+        task_params='{"preset_id":4,"channel":1,"inference_type":"det"}',
+    ),
+)
+
 
 class MockMissionRunnerNode(Node):
     """一键创建测试点位并启动 mock 巡检任务。"""
@@ -96,6 +125,8 @@ class MockMissionRunnerNode(Node):
         super().__init__('mock_mission_runner')
 
         self.declare_parameter('map_name', 'factory_map')
+        self.declare_parameter('seed_secondary_map', True)
+        self.declare_parameter('secondary_map_name', 'room_map')
         self.declare_parameter('mission_node_name', '/mission_bt_node')
         self.declare_parameter('add_waypoint_service', '/waypoint_manager/add_waypoint')
         self.declare_parameter('delete_waypoint_service', '/waypoint_manager/delete_waypoint')
@@ -114,6 +145,8 @@ class MockMissionRunnerNode(Node):
         self.declare_parameter('export_tree_dot', False)
 
         self._map_name = str(self.get_parameter('map_name').value)
+        self._seed_secondary_map = bool(self.get_parameter('seed_secondary_map').value)
+        self._secondary_map_name = str(self.get_parameter('secondary_map_name').value)
         self._mission_node_name = str(self.get_parameter('mission_node_name').value)
         self._enable_mock_params = bool(self.get_parameter('enable_mock_params').value)
 
@@ -135,20 +168,42 @@ class MockMissionRunnerNode(Node):
         )
 
     def run(self) -> int:
+        if self._seed_secondary_map and self._secondary_map_name == self._map_name:
+            self.get_logger().error(
+                'secondary_map_name must differ from map_name when seed_secondary_map=true'
+            )
+            return 1
+
         if not self._wait_for_core_services():
             return 1
 
         if self._enable_mock_params and not self._configure_mock_params():
             return 1
 
-        if not self._delete_existing(DEFAULT_SEEDS):
+        if not self._delete_existing(self._map_name, DEFAULT_SEEDS):
             return 1
 
-        if not self._add_waypoints(DEFAULT_SEEDS):
+        if self._seed_secondary_map and not self._delete_existing(
+            self._secondary_map_name, SECONDARY_SEEDS
+        ):
+            return 1
+
+        if not self._add_waypoints(self._map_name, DEFAULT_SEEDS):
+            return 1
+
+        if self._seed_secondary_map and not self._add_waypoints(
+            self._secondary_map_name, SECONDARY_SEEDS
+        ):
             return 1
 
         if not self._start_mission([seed.waypoint_id for seed in DEFAULT_SEEDS]):
             return 1
+
+        if self._seed_secondary_map:
+            self.get_logger().info(
+                f'Seeded secondary mock map: {self._secondary_map_name} '
+                f'waypoints={len(SECONDARY_SEEDS)}'
+            )
 
         self.get_logger().info('Mock mission runner finished successfully')
         return 0
@@ -201,36 +256,42 @@ class MockMissionRunnerNode(Node):
         self.get_logger().info('mission_bt_node mock parameters configured')
         return True
 
-    def _delete_existing(self, seeds: Iterable[WaypointSeed]) -> bool:
+    def _delete_existing(self, map_name: str, seeds: Iterable[WaypointSeed]) -> bool:
         for seed in seeds:
             req = DeleteWaypoint.Request()
-            req.map_name = self._map_name
+            req.map_name = map_name
             req.waypoint_id = seed.waypoint_id
             future = self._delete_client.call_async(req)
             rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)
             if not future.done():
-                self.get_logger().warning(f'Delete timeout for {seed.waypoint_id}, continue')
+                self.get_logger().warning(
+                    f'Delete timeout for {map_name}/{seed.waypoint_id}, continue'
+                )
                 continue
             result = future.result()
             if result is not None and result.result == 1:
-                self.get_logger().info(f'Deleted old seed waypoint: {seed.waypoint_id}')
+                self.get_logger().info(
+                    f'Deleted old seed waypoint: {map_name}/{seed.waypoint_id}'
+                )
         return True
 
-    def _add_waypoints(self, seeds: Iterable[WaypointSeed]) -> bool:
+    def _add_waypoints(self, map_name: str, seeds: Iterable[WaypointSeed]) -> bool:
         for seed in seeds:
             req = AddWaypoint.Request()
-            req.waypoint = self._seed_to_msg(seed)
+            req.waypoint = self._seed_to_msg(map_name, seed)
             future = self._add_client.call_async(req)
             rclpy.spin_until_future_complete(self, future, timeout_sec=3.0)
             if not future.done():
-                self.get_logger().error(f'Add waypoint timeout: {seed.waypoint_id}')
+                self.get_logger().error(f'Add waypoint timeout: {map_name}/{seed.waypoint_id}')
                 return False
             result = future.result()
             if result is None or result.result != 1:
                 message = result.message if result is not None else 'no response'
-                self.get_logger().error(f'Add waypoint failed: {seed.waypoint_id} -> {message}')
+                self.get_logger().error(
+                    f'Add waypoint failed: {map_name}/{seed.waypoint_id} -> {message}'
+                )
                 return False
-            self.get_logger().info(f'Added waypoint: {seed.waypoint_id}')
+            self.get_logger().info(f'Added waypoint: {map_name}/{seed.waypoint_id}')
         return True
 
     def _start_mission(self, waypoint_ids: list[str]) -> bool:
@@ -252,10 +313,10 @@ class MockMissionRunnerNode(Node):
         )
         return True
 
-    def _seed_to_msg(self, seed: WaypointSeed) -> WaypointTask:
+    def _seed_to_msg(self, map_name: str, seed: WaypointSeed) -> WaypointTask:
         msg = WaypointTask()
         msg.waypoint_id = seed.waypoint_id
-        msg.map_name = self._map_name
+        msg.map_name = map_name
         msg.pose = Pose2D(x=seed.x, y=seed.y, theta=seed.theta)
         msg.waypoint_type = seed.waypoint_type
         msg.label = seed.label

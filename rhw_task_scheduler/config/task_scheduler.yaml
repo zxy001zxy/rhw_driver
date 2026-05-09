@@ -7,6 +7,17 @@ waypoint_manager:
     # 航点持久化目录
     storage_dir: "~/.rhw/waypoints"
 
+    # MQTT 点位主动同步
+    mqtt_sync_enabled: true
+    mqtt_broker_host: "8.130.34.168"
+    mqtt_broker_port: 1883
+    mqtt_client_id: "robot-inspect-forwarder"
+    mqtt_username: "admin"
+    mqtt_password: "public"
+    mqtt_waypoint_sync_topic: "/robot-dog/DOG001/Upload/Data"
+    mqtt_qos: 1
+    mqtt_keep_alive_sec: 60
+
     # 服务名
     add_waypoint_service: "/waypoint_manager/add_waypoint"
     delete_waypoint_service: "/waypoint_manager/delete_waypoint"
@@ -24,7 +35,7 @@ mission_bt_node:
     debug_tree_output_dir: "/tmp/rhw_task_scheduler_bt"
 
     # ---------- 内部调试 mock ----------
-    debug_mock_enabled: false
+    debug_mock_enabled: true
     debug_mock_delay_sec: 0.5
     debug_mock_nav_result: "success"
     debug_mock_ptz_result: "success"
