@@ -5,6 +5,7 @@ import os
 import site
 import sys
 import threading
+import time
 
 
 def _prefer_ros_system_site_packages() -> None:
@@ -38,8 +39,6 @@ class CameraPublisherNode(Node):
     * 每帧只解码一次（在后台线程） → 无重复计算
     """
 
-    _MAX_CONSECUTIVE_FAILURES = 60  # 连续失败此数后触发重连
-
     def __init__(self) -> None:
         super().__init__('camera_publisher_node')
 
@@ -54,7 +53,9 @@ class CameraPublisherNode(Node):
         self.declare_parameter('image_topic', '/camera/rgb/image_raw')
         self.declare_parameter('frame_id', 'camera_link')
         self.declare_parameter('reconnect_interval', 3.0)      # 断线重连间隔(秒)
+        self.declare_parameter('read_failure_timeout', 2.0)    # 连续读帧失败多久后重连(秒)
         self.declare_parameter('rtsp_transport', 'tcp')        # tcp 稳定 / udp 低延迟
+        self.declare_parameter('ffmpeg_low_latency', False)    # True 启用 nobuffer/low_delay
         self.declare_parameter('publish_compressed', True)     # 同时发布 CompressedImage
         self.declare_parameter('jpeg_quality', 70)             # JPEG 压缩质量 1-100
         self.declare_parameter('output_width', 1920)           # 输出宽度，0 表示保持原尺寸
@@ -75,8 +76,19 @@ class CameraPublisherNode(Node):
             self._rtsp_url = f'rtsp://{user}:{pwd}@{ip}:{port}{path}'
 
         self._frame_id: str = str(self.get_parameter('frame_id').value)
-        self._reconnect_interval: float = float(self.get_parameter('reconnect_interval').value)
-        self._rtsp_transport: str = str(self.get_parameter('rtsp_transport').value)
+        self._reconnect_interval: float = max(
+            float(self.get_parameter('reconnect_interval').value), 0.1
+        )
+        self._read_failure_timeout: float = max(
+            float(self.get_parameter('read_failure_timeout').value), 0.1
+        )
+        self._rtsp_transport: str = str(self.get_parameter('rtsp_transport').value).strip().lower()
+        if self._rtsp_transport not in ('tcp', 'udp'):
+            self.get_logger().warn(
+                f'rtsp_transport={self._rtsp_transport!r} 无效，已改用 tcp'
+            )
+            self._rtsp_transport = 'tcp'
+        self._ffmpeg_low_latency: bool = bool(self.get_parameter('ffmpeg_low_latency').value)
         self._publish_compressed: bool = bool(self.get_parameter('publish_compressed').value)
         self._jpeg_quality: int = int(self.get_parameter('jpeg_quality').value)
         self._output_width: int = max(int(self.get_parameter('output_width').value), 0)
@@ -115,8 +127,8 @@ class CameraPublisherNode(Node):
         self._latest_frame = None       # 最新帧 (numpy ndarray)，由 read 线程写入
         self._frame_seq: int = 0        # 帧序号，read 成功 +1
         self._published_seq: int = 0    # 上次已发布的帧序号
-        self._consecutive_failures = 0
         self._need_reconnect = False
+        self._next_reconnect_time = 0.0
 
         self._stop_event = threading.Event()
         self._read_thread: threading.Thread | None = None
@@ -130,25 +142,27 @@ class CameraPublisherNode(Node):
 
         self.get_logger().info(
             f'camera_publisher_node 已启动  话题={topic}  帧率={fps:.1f}Hz  '
-            f'传输={self._rtsp_transport}  '
+            f'传输={self._rtsp_transport}  低延迟={self._ffmpeg_low_latency}  '
             f'rtsp={self._mask_url(self._rtsp_url)}'
         )
 
     # ==================================================================
     #  摄像头 打开 / 关闭
     # ==================================================================
-    def _open_camera(self) -> bool:
+    def _open_camera(self, reason: str = '', *, force: bool = False) -> bool:
         """打开（或重新打开）RTSP 流，成功返回 True。"""
+        now = time.monotonic()
+        if not force and now < self._next_reconnect_time:
+            return False
+
+        self._next_reconnect_time = now + self._reconnect_interval
+        if reason:
+            self.get_logger().warn(reason)
+
         self._stop_read_thread()
         self._release_camera()
 
-        # FFmpeg 环境选项：低延迟配置
-        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
-            f'rtsp_transport;{self._rtsp_transport}|'
-            'fflags;nobuffer|'
-            'flags;low_delay|'
-            'max_delay;500000'
-        )
+        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = self._build_ffmpeg_options()
 
         cap = cv2.VideoCapture(self._rtsp_url, cv2.CAP_FFMPEG)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)         
@@ -157,8 +171,8 @@ class CameraPublisherNode(Node):
 
         if cap.isOpened():
             self._cap = cap
-            self._consecutive_failures = 0
             self._need_reconnect = False
+            self._next_reconnect_time = 0.0
             self._start_read_thread()
             self.get_logger().info('摄像头连接成功')
             return True
@@ -199,7 +213,8 @@ class CameraPublisherNode(Node):
         每次成功后覆盖 _latest_frame，确保发布定时器取到的
         始终是最新已解码帧。
         """
-        failures = 0
+        failure_started_at: float | None = None
+        last_failure_log_at = 0.0
         while not self._stop_event.is_set():
             cap = self._cap
             if cap is None:
@@ -211,14 +226,26 @@ class CameraPublisherNode(Node):
                 with self._lock:
                     self._latest_frame = frame
                     self._frame_seq += 1
-                failures = 0
+                failure_started_at = None
             else:
-                failures += 1
-                if failures >= self._MAX_CONSECUTIVE_FAILURES:
+                now = time.monotonic()
+                if failure_started_at is None:
+                    failure_started_at = now
+                failure_duration = now - failure_started_at
+
+                if failure_duration >= self._read_failure_timeout:
                     self._need_reconnect = True
                     break
+
+                if now - last_failure_log_at >= 5.0:
+                    self.get_logger().warn(
+                        f'读帧失败，等待码流恢复 '
+                        f'({failure_duration:.1f}/{self._read_failure_timeout:.1f}s)'
+                    )
+                    last_failure_log_at = now
+
                 # 短暂等待避免 CPU 空转
-                self._stop_event.wait(0.002)
+                self._stop_event.wait(0.01)
 
     # ==================================================================
     #  定时器回调 — 发布最新帧（无阻塞）
@@ -228,12 +255,11 @@ class CameraPublisherNode(Node):
         if self._need_reconnect or \
            (self._read_thread is not None and not self._read_thread.is_alive()
             and not self._stop_event.is_set()):
-            self.get_logger().warn('read 线程退出，正在重连...')
-            self._open_camera()
+            self._open_camera('read 线程退出，正在重连...')
             return
 
         if self._cap is None:
-            self._open_camera()
+            self._open_camera('摄像头未连接，正在连接...')
             return
 
         # 非阻塞取最新帧
@@ -290,6 +316,18 @@ class CameraPublisherNode(Node):
         except Exception:
             pass
         return url
+
+    def _build_ffmpeg_options(self) -> str:
+        options = [f'rtsp_transport;{self._rtsp_transport}']
+        if self._ffmpeg_low_latency:
+            options.extend([
+                'fflags;nobuffer',
+                'flags;low_delay',
+                'max_delay;500000',
+            ])
+        else:
+            options.append('max_delay;2000000')
+        return '|'.join(options)
 
     def destroy_node(self) -> None:
         self._stop_read_thread()

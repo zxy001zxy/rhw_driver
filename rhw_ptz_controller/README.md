@@ -94,7 +94,9 @@ ros2 run rhw_ptz_controller camera_publisher_node
 | `image_topic` | string | `/camera/rgb/image_raw` | 图像话题名 |
 | `frame_id` | string | `camera_link` | 图像帧的 frame_id |
 | `reconnect_interval` | float | `3.0` | 断线重连间隔(秒) |
+| `read_failure_timeout` | float | `2.0` | 连续读帧失败超过此时间才重连，避免偶发 H.264 错帧触发重连 |
 | `rtsp_transport` | string | `tcp` | RTSP 传输方式，`tcp` 更稳定 |
+| `ffmpeg_low_latency` | bool | `false` | 是否启用 FFmpeg `nobuffer/low_delay`；`false` 稳定优先，`true` 延迟更低 |
 | `publish_compressed` | bool | `true` | 是否同时发布压缩图像 |
 | `jpeg_quality` | int | `70` | 压缩图像 JPEG 质量 |
 | `output_width` | int | `1920` | 输出宽度，0 表示保持原始尺寸 |
@@ -180,6 +182,11 @@ ros2 service call /ptz/patrol rhw_msgs/srv/PtzPatrol \
 ros2 service call /ptz/absolute_move rhw_msgs/srv/PtzAbsoluteMove \
   "{channel: 1, azimuth: 180.0, elevation: 0.0, azimuth_speed: 50, elevation_speed: 50}"
 ```
+
+说明：
+
+- `rhw_task_scheduler` 中视觉点位的 `task_params` 推荐记录 `azimuth` / `elevation` 这组绝对位置参数
+- 视觉点位执行时应调用 `/ptz/absolute_move`，而不是依赖 `/ptz/goto_preset` 的 `preset_id`
 
 ### /ptz/get_position — 获取当前角度
 

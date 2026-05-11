@@ -51,7 +51,7 @@ DEFAULT_SEEDS: tuple[WaypointSeed, ...] = (
         theta=0.0,
         waypoint_type=WaypointTask.TYPE_VISION,
         label='视觉识别点A',
-        task_params='{"preset_id":1,"channel":1,"inference_type":"det"}',
+        task_params='{"azimuth":30.0,"elevation":-5.0,"channel":1,"azimuth_speed":50,"elevation_speed":50,"inference_type":"det"}',
     ),
     WaypointSeed(
         waypoint_id='normal_002',
@@ -68,7 +68,7 @@ DEFAULT_SEEDS: tuple[WaypointSeed, ...] = (
         theta=0.0,
         waypoint_type=WaypointTask.TYPE_VISION,
         label='视觉识别点B',
-        task_params='{"preset_id":2,"channel":1,"inference_type":"det"}',
+        task_params='{"azimuth":90.0,"elevation":0.0,"channel":1,"azimuth_speed":50,"elevation_speed":50,"inference_type":"det"}',
     ),
     WaypointSeed(
         waypoint_id='normal_003',
@@ -104,7 +104,7 @@ SECONDARY_SEEDS: tuple[WaypointSeed, ...] = (
         theta=0.0,
         waypoint_type=WaypointTask.TYPE_VISION,
         label='房间视觉点A',
-        task_params='{"preset_id":3,"channel":1,"inference_type":"det"}',
+        task_params='{"azimuth":135.0,"elevation":-10.0,"channel":1,"azimuth_speed":40,"elevation_speed":40,"inference_type":"det"}',
     ),
     WaypointSeed(
         waypoint_id='room_vision_002',
@@ -113,7 +113,7 @@ SECONDARY_SEEDS: tuple[WaypointSeed, ...] = (
         theta=1.57,
         waypoint_type=WaypointTask.TYPE_VISION,
         label='房间视觉点B',
-        task_params='{"preset_id":4,"channel":1,"inference_type":"det"}',
+        task_params='{"azimuth":210.0,"elevation":5.0,"channel":1,"azimuth_speed":40,"elevation_speed":40,"inference_type":"det"}',
     ),
 )
 

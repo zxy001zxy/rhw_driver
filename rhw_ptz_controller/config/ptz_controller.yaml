@@ -25,7 +25,9 @@ camera_publisher_node:
     image_topic: "/camera/rgb/image_raw"
     frame_id: "camera_link"
     reconnect_interval: 3.0
+    read_failure_timeout: 2.0          # 连续读帧失败超过此时间才重连，避免偶发 H.264 错帧触发重连
     rtsp_transport: "tcp"              # tcp 更稳定不丢帧，udp 延迟更低
+    ffmpeg_low_latency: false          # true=更低延迟但更怕抖动；false=稳定优先
     publish_compressed: true           # 同时发布 /camera/rgb/image_raw/compressed
     jpeg_quality: 70                   # JPEG 压缩质量 1-100
     output_width: 1920                 # 输出宽度，0=保持原尺寸
@@ -45,7 +47,9 @@ thermal_camera_publisher_node:
     image_topic: "/camera/thermal/image_raw"
     frame_id: "thermal_camera_link"
     reconnect_interval: 3.0
+    read_failure_timeout: 2.0
     rtsp_transport: "tcp"
+    ffmpeg_low_latency: false
     publish_compressed: true
     jpeg_quality: 70
     output_width: 0                    # 保持热成像原始分辨率

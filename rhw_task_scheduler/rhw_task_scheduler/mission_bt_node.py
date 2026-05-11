@@ -13,7 +13,7 @@
   └── Selector [按 waypoint_type 分支]
       ├── Sequence [TYPE_VISION]
       │   ├── IsVisionPoint
-      │   ├── PtzGotoPreset
+    │   ├── PtzAbsoluteMove
       │   ├── WaitPtzStable
       │   ├── CaptureImage
       │   └── TriggerInference
@@ -55,7 +55,7 @@ from rhw_task_scheduler.bt_actions.condition_nodes import (
 )
 from rhw_task_scheduler.bt_actions.inference_action import TriggerInference
 from rhw_task_scheduler.bt_actions.navigate_action import CancelNavigation, NavigateToGoal
-from rhw_task_scheduler.bt_actions.ptz_actions import CaptureImage, PtzGotoPreset, WaitPtzStable
+from rhw_task_scheduler.bt_actions.ptz_actions import CaptureImage, PtzAbsoluteMove, WaitPtzStable
 from rhw_task_scheduler.debug_tools import safe_slug
 from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
@@ -174,7 +174,7 @@ class MissionBtNode(Node):
         self.declare_parameter('cancel_service', '/move_base/cancel')
         self.declare_parameter('nav_status_topic', '/navigation_status')
         self.declare_parameter('nav_retry_max', 3)
-        self.declare_parameter('ptz_goto_preset_service', '/ptz/goto_preset')
+        self.declare_parameter('ptz_absolute_move_service', '/ptz/absolute_move')
         self.declare_parameter('ptz_capture_service', '/ptz/capture_image')
         self.declare_parameter('ptz_status_topic', '/ptz/status')
         self.declare_parameter('ptz_stable_timeout_sec', 5.0)
@@ -554,7 +554,7 @@ class MissionBtNode(Node):
         ├── CheckBattery
         ├── NavigateToGoal
         └── Selector [任务类型分支]
-            ├── Sequence [VISION: preset → wait → capture → inference]
+            ├── Sequence [VISION: absolute_move → wait → capture → inference]
             ├── Sequence [CHARGE: recharge]
             └── IsNormalPoint [NORMAL: 到达即完成]
         """
@@ -574,7 +574,7 @@ class MissionBtNode(Node):
         # 3a) 视觉识别任务
         vision_seq = py_trees.composites.Sequence(name='VisionTask', memory=True)
         vision_seq.add_child(IsVisionPoint('IsVisionPoint?'))
-        vision_seq.add_child(PtzGotoPreset('PtzGotoPreset', node=self))
+        vision_seq.add_child(PtzAbsoluteMove('PtzAbsoluteMove', node=self))
         vision_seq.add_child(WaitPtzStable('WaitPtzStable', node=self))
         vision_seq.add_child(CaptureImage('CaptureImage', node=self))
         vision_seq.add_child(TriggerInference('TriggerInference', node=self))

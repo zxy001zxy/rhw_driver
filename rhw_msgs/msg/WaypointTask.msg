@@ -23,7 +23,8 @@ string label
 
 # 任务参数，JSON 字符串
 # 示例（TYPE_VISION）:
-#   {"preset_id": 1, "channel": 1, "inference_type": "det"}
+#   {"azimuth": 180.0, "elevation": 0.0, "channel": 1,
+#    "azimuth_speed": 50, "elevation_speed": 50, "inference_type": "det"}
 # 示例（TYPE_CHARGE）:
 #   {"timeout_sec": 300}
 # 普通导航点可留空

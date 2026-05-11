@@ -52,7 +52,7 @@ mission_bt_node:
     nav_retry_max: 3
 
     # ---------- PTZ ----------
-    ptz_goto_preset_service: "/ptz/goto_preset"
+    ptz_absolute_move_service: "/ptz/absolute_move"
     ptz_capture_service: "/ptz/capture_image"
     ptz_status_topic: "/ptz/status"
     ptz_stable_timeout_sec: 5.0

@@ -1,8 +1,8 @@
 """ptz_actions — 云台相关行为树叶节点.
 
-PtzGotoPreset: 调用 /ptz/goto_preset 跳转预置位。
-WaitPtzStable: 订阅 /ptz/status 等待云台空闲。
-CaptureImage:  调用 /ptz/capture_image 抓拍。
+PtzAbsoluteMove: 调用 /ptz/absolute_move 移动到绝对角度。
+WaitPtzStable:  订阅 /ptz/status 等待云台空闲。
+CaptureImage:   调用 /ptz/capture_image 抓拍。
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from rclpy.node import Node
 
 from rhw_msgs.msg import PtzStatus
 from rhw_msgs.srv import CaptureImage as CaptureImageSrv
-from rhw_msgs.srv import PtzGotoPreset as PtzGotoPresetSrv
+from rhw_msgs.srv import PtzAbsoluteMove as PtzAbsoluteMoveSrv
 from rhw_task_scheduler.debug_tools import (
     is_debug_mock_enabled,
     parse_task_params,
@@ -23,11 +23,13 @@ from rhw_task_scheduler.debug_tools import (
 from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
 
-class PtzGotoPreset(py_trees.behaviour.Behaviour):
-    """调用 /ptz/goto_preset.
+class PtzAbsoluteMove(py_trees.behaviour.Behaviour):
+    """调用 /ptz/absolute_move.
 
     从 Blackboard 读取:
-        /current_waypoint.task_params  — JSON string {"preset_id": int, "channel": int}
+        /current_waypoint.task_params  — JSON string
+            {"azimuth": float, "elevation": float, "channel": int,
+             "azimuth_speed": int, "elevation_speed": int}
     """
 
     def __init__(self, name: str, node: Node, **kwargs):
@@ -41,9 +43,10 @@ class PtzGotoPreset(py_trees.behaviour.Behaviour):
         else:
             self._audit = ServiceAuditPublisher(self._node)
 
-        srv_name = self._node.get_parameter('ptz_goto_preset_service').value
-        self._client = self._node.create_client(PtzGotoPresetSrv, srv_name)
+        srv_name = self._node.get_parameter('ptz_absolute_move_service').value
+        self._client = self._node.create_client(PtzAbsoluteMoveSrv, srv_name)
         self._default_channel = int(self._node.get_parameter('default_ptz_channel').value)
+        self._default_move_speed = 50
         self._future = None
         self._mock_start_time: float | None = None
         self._mock_audit_sent = False
@@ -51,13 +54,35 @@ class PtzGotoPreset(py_trees.behaviour.Behaviour):
     def initialise(self) -> None:
         self._future = None
         self._mock_start_time = time.monotonic()
+        self._mock_audit_sent = False
+        self._req_time: float | None = None
+
+    def _build_request_payload(self, params: dict) -> dict | None:
+        if 'azimuth' not in params or 'elevation' not in params:
+            return None
+
+        speed = int(params.get('speed', self._default_move_speed))
+        return {
+            'channel': int(params.get('channel', self._default_channel)),
+            'azimuth': float(params['azimuth']),
+            'elevation': float(params['elevation']),
+            'azimuth_speed': int(params.get('azimuth_speed', speed)),
+            'elevation_speed': int(params.get('elevation_speed', speed)),
+        }
 
     def update(self) -> py_trees.common.Status:
         wp = self._bb.get('/current_waypoint')
+        params = parse_task_params(wp)
+        request_payload = self._build_request_payload(params)
+
+        if request_payload is None:
+            self._node.get_logger().warning(
+                'Vision waypoint task_params missing azimuth/elevation for PTZ absolute move'
+            )
+            return py_trees.common.Status.FAILURE
 
         if is_debug_mock_enabled(self._node):
-            srv_name = self._node.get_parameter('ptz_goto_preset_service').value
-            params = parse_task_params(wp)
+            srv_name = self._node.get_parameter('ptz_absolute_move_service').value
             if not self._mock_audit_sent:
                 self._mock_audit_sent = True
                 self._req_time = time.time()
@@ -65,10 +90,7 @@ class PtzGotoPreset(py_trees.behaviour.Behaviour):
                     service=srv_name,
                     role='client',
                     phase='request',
-                    request={
-                        'channel': int(params.get('channel', self._default_channel)),
-                        'preset_id': int(params.get('preset_id', 1)),
-                    },
+                    request=request_payload,
                     details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
                 )
 
@@ -89,7 +111,7 @@ class PtzGotoPreset(py_trees.behaviour.Behaviour):
                     details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
                 )
                 self._node.get_logger().info(
-                    f'[DEBUG MOCK] PtzGotoPreset -> {mock_status.name} wp={wp.get("waypoint_id", "?") if wp else "?"}'
+                    f'[DEBUG MOCK] PtzAbsoluteMove -> {mock_status.name} wp={wp.get("waypoint_id", "?") if wp else "?"}'
                 )
             return mock_status
 
@@ -101,7 +123,7 @@ class PtzGotoPreset(py_trees.behaviour.Behaviour):
                 result = self._future.result()
                 duration = (time.time() - self._req_time) * 1000 if self._req_time else None
                 self._audit.publish(
-                    service=self._node.get_parameter('ptz_goto_preset_service').value,
+                    service=self._node.get_parameter('ptz_absolute_move_service').value,
                     role='client',
                     phase='response',
                     response={'result': int(result.result), 'message': str(result.message)},
@@ -109,43 +131,45 @@ class PtzGotoPreset(py_trees.behaviour.Behaviour):
                     duration_ms=duration,
                 )
                 if result.result == 1:
-                    self._node.get_logger().info('PTZ goto preset succeeded')
+                    self._node.get_logger().info('PTZ absolute move succeeded')
                     return py_trees.common.Status.SUCCESS
-                self._node.get_logger().warning(f'PTZ goto preset failed: {result.message}')
+                self._node.get_logger().warning(f'PTZ absolute move failed: {result.message}')
                 return py_trees.common.Status.FAILURE
             except Exception as exc:
                 duration = (time.time() - self._req_time) * 1000 if self._req_time else None
                 self._audit.publish(
-                    service=self._node.get_parameter('ptz_goto_preset_service').value,
+                    service=self._node.get_parameter('ptz_absolute_move_service').value,
                     role='client',
                     phase='response',
                     success=False,
                     duration_ms=duration,
                     details={'error': str(exc)},
                 )
-                self._node.get_logger().error(f'PTZ goto preset exception: {exc}')
+                self._node.get_logger().error(f'PTZ absolute move exception: {exc}')
                 return py_trees.common.Status.FAILURE
 
-        # 解析参数
-        params = parse_task_params(wp)
-
         if not self._client.service_is_ready():
-            self._node.get_logger().warning('PTZ goto_preset service not ready')
+            self._node.get_logger().warning('PTZ absolute_move service not ready')
             return py_trees.common.Status.RUNNING
 
-        req = PtzGotoPresetSrv.Request()
-        req.channel = int(params.get('channel', self._default_channel))
-        req.preset_id = int(params.get('preset_id', 1))
+        req = PtzAbsoluteMoveSrv.Request()
+        req.channel = int(request_payload['channel'])
+        req.azimuth = float(request_payload['azimuth'])
+        req.elevation = float(request_payload['elevation'])
+        req.azimuth_speed = int(request_payload['azimuth_speed'])
+        req.elevation_speed = int(request_payload['elevation_speed'])
 
         self._node.get_logger().info(
-            f'PTZ goto preset: ch={req.channel} preset={req.preset_id}'
+            'PTZ absolute move: '
+            f'ch={req.channel} azimuth={req.azimuth:.2f} elevation={req.elevation:.2f} '
+            f'az_speed={req.azimuth_speed} el_speed={req.elevation_speed}'
         )
         self._req_time = time.time()
         self._audit.publish(
-            service=self._node.get_parameter('ptz_goto_preset_service').value,
+            service=self._node.get_parameter('ptz_absolute_move_service').value,
             role='client',
             phase='request',
-            request={'channel': int(req.channel), 'preset_id': int(req.preset_id)},
+            request=request_payload,
         )
         self._future = self._client.call_async(req)
         return py_trees.common.Status.RUNNING

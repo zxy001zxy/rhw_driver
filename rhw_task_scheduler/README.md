@@ -99,7 +99,7 @@ Sequence (WaypointHandler)
 └── Selector (TaskSelector)
     ├── Sequence (VisionTask)
     │   ├── IsVisionPoint
-    │   ├── PtzGotoPreset
+  │   ├── PtzAbsoluteMove
     │   ├── WaitPtzStable
     │   ├── CaptureImage
     │   └── TriggerInference
@@ -430,7 +430,7 @@ http://localhost:8765/
 | `cancel_service` | `/move_base/cancel` | 导航取消服务 |
 | `nav_status_topic` | `/navigation_status` | 导航状态话题 |
 | `nav_retry_max` | `3` | 导航失败最大重试次数 |
-| `ptz_goto_preset_service` | `/ptz/goto_preset` | 云台预置位服务 |
+| `ptz_absolute_move_service` | `/ptz/absolute_move` | 云台绝对位置移动服务 |
 | `ptz_capture_service` | `/ptz/capture_image` | 抓拍服务 |
 | `ptz_status_topic` | `/ptz/status` | 云台状态话题 |
 | `recharge_service` | `/recharge` | 回充服务 |
@@ -483,7 +483,7 @@ ros2 topic echo /service_events | grep '"service": "/mission/start"'
 | `debug_mock_enabled` | `false` | 是否启用内部 mock 调试模式 |
 | `debug_mock_delay_sec` | `0.5` | mock 动作统一延时 |
 | `debug_mock_nav_result` | `success` | 导航 mock 结果：`success` / `failure` / `running` |
-| `debug_mock_ptz_result` | `success` | 云台预置位/等待稳定 mock 结果 |
+| `debug_mock_ptz_result` | `success` | 云台绝对位置移动/等待稳定 mock 结果 |
 | `debug_mock_capture_result` | `success` | 抓拍 mock 结果 |
 | `debug_mock_charge_result` | `success` | 充电 mock 结果 |
 | `debug_mock_inference_result` | `success` | 推理 mock 结果 |
@@ -511,10 +511,17 @@ ros2 service call /waypoint_manager/add_waypoint rhw_msgs/srv/AddWaypoint "{
     pose: {x: 1.2, y: 3.4, theta: 0.0},
     waypoint_type: 2,
     label: '视觉检测点1',
-    task_params: '{\"preset_id\":1,\"channel\":1,\"inference_type\":\"det\"}'
+    task_params: '{\"azimuth\":180.0,\"elevation\":0.0,\"channel\":1,\"azimuth_speed\":50,\"elevation_speed\":50,\"inference_type\":\"det\"}'
   }
 }"
 ```
+
+视觉点位说明：
+
+- 视觉点位的 `task_params` 录入的是云台绝对位置，不再使用 `preset_id`
+- 必填字段至少包括 `azimuth`、`elevation`
+- 可选字段包括 `channel`、`azimuth_speed`、`elevation_speed`、`inference_type`
+- 如果视觉点位缺少 `azimuth` 或 `elevation`，行为树会直接判定该视觉动作失败
 
 #### 查询地图点位
 

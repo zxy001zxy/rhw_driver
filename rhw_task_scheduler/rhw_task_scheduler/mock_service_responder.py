@@ -3,7 +3,7 @@
 功能:
   1. 提供 /move_base_simple/goal        (Goal.srv)       → 模拟导航成功
   2. 提供 /move_base/cancel             (Cancel.srv)     → 模拟取消成功
-  3. 提供 /ptz/goto_preset              (PtzGotoPreset)  → 模拟云台跳转成功
+    3. 提供 /ptz/absolute_move            (PtzAbsoluteMove) → 模拟云台绝对位置移动成功
   4. 提供 /ptz/capture_image            (CaptureImage)   → 模拟抓拍成功
   5. 提供 /recharge                     (Recharge)       → 模拟回充成功
   6. 订阅 /service_events 话题 → 彩色终端打印每条审计事件
@@ -33,6 +33,7 @@ from std_msgs.msg import String
 from rhw_msgs.msg import NavigationStatus
 from rhw_msgs.srv import Cancel, Goal
 from rhw_msgs.srv import CaptureImage as CaptureImageSrv
+from rhw_msgs.srv import PtzAbsoluteMove as PtzAbsoluteMoveSrv
 from rhw_msgs.srv import PtzGotoPreset as PtzGotoPresetSrv
 from rhw_msgs.srv import Recharge as RechargeSrv
 
@@ -55,6 +56,7 @@ _PHASE_COLOR = {
 _SRV_SHORT = {
     '/move_base_simple/goal': 'NAV/Goal',
     '/move_base/cancel': 'NAV/Cancel',
+    '/ptz/absolute_move': 'PTZ/Absolute',
     '/ptz/goto_preset': 'PTZ/Preset',
     '/ptz/capture_image': 'PTZ/Capture',
     '/recharge': 'Recharge',
@@ -85,6 +87,7 @@ class MockServiceResponder(Node):
         self.declare_parameter('publish_nav_status', True)
         self.declare_parameter('goal_service', '/move_base_simple/goal')
         self.declare_parameter('cancel_service', '/move_base/cancel')
+        self.declare_parameter('ptz_absolute_move_service', '/ptz/absolute_move')
         self.declare_parameter('ptz_goto_preset_service', '/ptz/goto_preset')
         self.declare_parameter('ptz_capture_service', '/ptz/capture_image')
         self.declare_parameter('recharge_service', '/recharge')
@@ -112,6 +115,12 @@ class MockServiceResponder(Node):
             Cancel,
             str(self.get_parameter('cancel_service').value),
             self._handle_cancel,
+            callback_group=self._cb,
+        )
+        self.create_service(
+            PtzAbsoluteMoveSrv,
+            str(self.get_parameter('ptz_absolute_move_service').value),
+            self._handle_ptz_absolute_move,
             callback_group=self._cb,
         )
         self.create_service(
@@ -216,6 +225,20 @@ class MockServiceResponder(Node):
     ) -> PtzGotoPresetSrv.Response:
         self.get_logger().info(
             f'{_MAGENTA}[PTZ Preset]{_RESET} ch={request.channel} preset={request.preset_id}'
+        )
+        if self._delay > 0:
+            time.sleep(self._delay)
+        response.result = self._ptz_result
+        response.message = 'mock OK' if self._ptz_result == 1 else 'mock FAIL'
+        return response
+
+    def _handle_ptz_absolute_move(
+        self, request: PtzAbsoluteMoveSrv.Request, response: PtzAbsoluteMoveSrv.Response
+    ) -> PtzAbsoluteMoveSrv.Response:
+        self.get_logger().info(
+            f'{_MAGENTA}[PTZ Absolute]{_RESET} ch={request.channel} '
+            f'az={request.azimuth:.2f} el={request.elevation:.2f} '
+            f'az_speed={request.azimuth_speed} el_speed={request.elevation_speed}'
         )
         if self._delay > 0:
             time.sleep(self._delay)
