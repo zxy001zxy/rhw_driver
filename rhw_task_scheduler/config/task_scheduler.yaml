@@ -34,17 +34,6 @@ mission_bt_node:
     debug_export_tree_dot: false
     debug_tree_output_dir: "/tmp/rhw_task_scheduler_bt"
 
-    # ---------- 内部调试 mock ----------
-    debug_mock_enabled: true
-    debug_mock_delay_sec: 0.5
-    debug_mock_nav_result: "success"
-    debug_mock_ptz_result: "success"
-    debug_mock_capture_result: "success"
-    debug_mock_charge_result: "success"
-    debug_mock_inference_result: "success"
-    debug_mock_battery_level: 100.0
-    debug_mock_capture_dir: "/tmp/rhw_task_scheduler_mock_captures"
-
     # ---------- 导航 ----------
     goal_service: "/move_base_simple/goal"
     cancel_service: "/move_base/cancel"

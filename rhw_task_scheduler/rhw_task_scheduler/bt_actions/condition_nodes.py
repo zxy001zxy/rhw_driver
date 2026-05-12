@@ -11,7 +11,6 @@ import py_trees
 from rclpy.node import Node
 
 from rhw_msgs.msg import UdpBatteryStatus, WaypointTask
-from rhw_task_scheduler.debug_tools import is_debug_mock_enabled
 
 
 class CheckBattery(py_trees.behaviour.Behaviour):
@@ -39,9 +38,6 @@ class CheckBattery(py_trees.behaviour.Behaviour):
         self._battery_level = min(msg.battery_level_left, msg.battery_level_right)
 
     def update(self) -> py_trees.common.Status:
-        if is_debug_mock_enabled(self._node):
-            self._battery_level = float(self._node.get_parameter('debug_mock_battery_level').value)
-
         low = self._battery_level < self._threshold
         self._bb.set('/battery_low', low)
         if low:

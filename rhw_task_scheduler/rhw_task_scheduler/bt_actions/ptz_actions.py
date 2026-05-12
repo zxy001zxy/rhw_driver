@@ -14,12 +14,7 @@ from rclpy.node import Node
 from rhw_msgs.msg import PtzStatus
 from rhw_msgs.srv import CaptureImage as CaptureImageSrv
 from rhw_msgs.srv import PtzAbsoluteMove as PtzAbsoluteMoveSrv
-from rhw_task_scheduler.debug_tools import (
-    is_debug_mock_enabled,
-    parse_task_params,
-    run_mock_action,
-    safe_slug,
-)
+from rhw_task_scheduler.bt_utils import parse_task_params
 from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
 
@@ -29,7 +24,7 @@ class PtzAbsoluteMove(py_trees.behaviour.Behaviour):
     从 Blackboard 读取:
         /current_waypoint.task_params  — JSON string
             {"azimuth": float, "elevation": float, "channel": int,
-             "azimuth_speed": int, "elevation_speed": int}
+             "zoom": float, "azimuth_speed": int, "elevation_speed": int}
     """
 
     def __init__(self, name: str, node: Node, **kwargs):
@@ -48,13 +43,9 @@ class PtzAbsoluteMove(py_trees.behaviour.Behaviour):
         self._default_channel = int(self._node.get_parameter('default_ptz_channel').value)
         self._default_move_speed = 50
         self._future = None
-        self._mock_start_time: float | None = None
-        self._mock_audit_sent = False
 
     def initialise(self) -> None:
         self._future = None
-        self._mock_start_time = time.monotonic()
-        self._mock_audit_sent = False
         self._req_time: float | None = None
 
     def _build_request_payload(self, params: dict) -> dict | None:
@@ -66,6 +57,7 @@ class PtzAbsoluteMove(py_trees.behaviour.Behaviour):
             'channel': int(params.get('channel', self._default_channel)),
             'azimuth': float(params['azimuth']),
             'elevation': float(params['elevation']),
+            'zoom': float(params.get('zoom', 0.0)),
             'azimuth_speed': int(params.get('azimuth_speed', speed)),
             'elevation_speed': int(params.get('elevation_speed', speed)),
         }
@@ -80,40 +72,6 @@ class PtzAbsoluteMove(py_trees.behaviour.Behaviour):
                 'Vision waypoint task_params missing azimuth/elevation for PTZ absolute move'
             )
             return py_trees.common.Status.FAILURE
-
-        if is_debug_mock_enabled(self._node):
-            srv_name = self._node.get_parameter('ptz_absolute_move_service').value
-            if not self._mock_audit_sent:
-                self._mock_audit_sent = True
-                self._req_time = time.time()
-                self._audit.publish(
-                    service=srv_name,
-                    role='client',
-                    phase='request',
-                    request=request_payload,
-                    details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
-                )
-
-            mock_status = run_mock_action(
-                node=self._node,
-                start_time=self._mock_start_time,
-                result_parameter='debug_mock_ptz_result',
-            )
-            if mock_status != py_trees.common.Status.RUNNING:
-                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
-                self._audit.publish(
-                    service=srv_name,
-                    role='client',
-                    phase='response',
-                    response={'result': 1 if mock_status == py_trees.common.Status.SUCCESS else 0},
-                    success=(mock_status == py_trees.common.Status.SUCCESS),
-                    duration_ms=duration,
-                    details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
-                )
-                self._node.get_logger().info(
-                    f'[DEBUG MOCK] PtzAbsoluteMove -> {mock_status.name} wp={wp.get("waypoint_id", "?") if wp else "?"}'
-                )
-            return mock_status
 
         if self._future is not None:
             # 等待异步结果
@@ -156,12 +114,14 @@ class PtzAbsoluteMove(py_trees.behaviour.Behaviour):
         req.channel = int(request_payload['channel'])
         req.azimuth = float(request_payload['azimuth'])
         req.elevation = float(request_payload['elevation'])
+        req.zoom = float(request_payload['zoom'])
         req.azimuth_speed = int(request_payload['azimuth_speed'])
         req.elevation_speed = int(request_payload['elevation_speed'])
 
         self._node.get_logger().info(
             'PTZ absolute move: '
             f'ch={req.channel} azimuth={req.azimuth:.2f} elevation={req.elevation:.2f} '
+            f'zoom={req.zoom:.2f} '
             f'az_speed={req.azimuth_speed} el_speed={req.elevation_speed}'
         )
         self._req_time = time.time()
@@ -196,13 +156,6 @@ class WaitPtzStable(py_trees.behaviour.Behaviour):
         self._start_time = time.monotonic()
 
     def update(self) -> py_trees.common.Status:
-        if is_debug_mock_enabled(self._node):
-            return run_mock_action(
-                node=self._node,
-                start_time=self._start_time,
-                result_parameter='debug_mock_ptz_result',
-            )
-
         if self._active_action in ('idle', 'Idle', ''):
             return py_trees.common.Status.SUCCESS
 
@@ -236,63 +189,13 @@ class CaptureImage(py_trees.behaviour.Behaviour):
         self._client = self._node.create_client(CaptureImageSrv, srv_name)
         self._default_channel = int(self._node.get_parameter('default_ptz_channel').value)
         self._future = None
-        self._mock_start_time: float | None = None
-        self._mock_audit_sent = False
 
     def initialise(self) -> None:
         self._future = None
-        self._mock_start_time = time.monotonic()
-        self._mock_audit_sent = False
         self._req_time: float | None = None
 
     def update(self) -> py_trees.common.Status:
         wp = self._bb.get('/current_waypoint')
-
-        if is_debug_mock_enabled(self._node):
-            srv_name = self._node.get_parameter('ptz_capture_service').value
-            params = parse_task_params(wp)
-            if not self._mock_audit_sent:
-                self._mock_audit_sent = True
-                self._req_time = time.time()
-                self._audit.publish(
-                    service=srv_name,
-                    role='client',
-                    phase='request',
-                    request={
-                        'channel': int(params.get('channel', self._default_channel)),
-                        'url_type': 'localURL',
-                    },
-                    details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
-                )
-
-            def _on_success() -> None:
-                base_dir = str(self._node.get_parameter('debug_mock_capture_dir').value)
-                waypoint_id = wp.get('waypoint_id', 'mock_capture') if wp else 'mock_capture'
-                file_path = f'{base_dir.rstrip("/")}/{safe_slug(waypoint_id, fallback="capture")}.jpg'
-                self._bb.set('/last_capture_path', file_path)
-
-            mock_status = run_mock_action(
-                node=self._node,
-                start_time=self._mock_start_time,
-                result_parameter='debug_mock_capture_result',
-                on_success=_on_success,
-            )
-            if mock_status != py_trees.common.Status.RUNNING:
-                duration = (time.time() - self._req_time) * 1000 if self._req_time else None
-                mock_path = self._bb.get('/last_capture_path') if mock_status == py_trees.common.Status.SUCCESS else ''
-                self._audit.publish(
-                    service=srv_name,
-                    role='client',
-                    phase='response',
-                    response={'result': 1 if mock_status == py_trees.common.Status.SUCCESS else 0, 'file_path': mock_path},
-                    success=(mock_status == py_trees.common.Status.SUCCESS),
-                    duration_ms=duration,
-                    details={'waypoint_id': wp.get('waypoint_id', '?') if wp else '?', 'mock': True},
-                )
-                self._node.get_logger().info(
-                    f'[DEBUG MOCK] CaptureImage -> {mock_status.name} wp={wp.get("waypoint_id", "?") if wp else "?"}'
-                )
-            return mock_status
 
         if self._future is not None:
             if not self._future.done():

@@ -10,7 +10,10 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', ['config/task_scheduler.yaml']),
-        ('share/' + package_name + '/launch', ['launch/task_scheduler.launch.py']),
+        ('share/' + package_name + '/launch', [
+            'launch/task_scheduler.launch.py',
+            'launch/mission_test.launch.py',
+        ]),
     ],
     install_requires=['setuptools', 'py_trees', 'paho-mqtt'],
     zip_safe=True,
@@ -22,9 +25,8 @@ setup(
         'console_scripts': [
             'waypoint_manager = rhw_task_scheduler.waypoint_manager:main',
             'mission_bt_node = rhw_task_scheduler.mission_bt_node:main',
-            'mock_mission_runner = rhw_task_scheduler.mock_mission_runner:main',
-            'mock_service_responder = rhw_task_scheduler.mock_service_responder:main',
             'bt_web_viewer = rhw_task_scheduler.bt_web_viewer:main',
+            'mission_test_mocks = rhw_task_scheduler.mission_test_mocks:main',
         ],
     },
 )

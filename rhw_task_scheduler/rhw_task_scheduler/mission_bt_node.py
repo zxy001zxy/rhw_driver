@@ -15,8 +15,7 @@
       │   ├── IsVisionPoint
     │   ├── PtzAbsoluteMove
       │   ├── WaitPtzStable
-      │   ├── CaptureImage
-      │   └── TriggerInference
+      │   └── CaptureImage
       ├── Sequence [TYPE_CHARGE]
       │   ├── IsChargePoint
       │   └── Recharge
@@ -53,10 +52,9 @@ from rhw_task_scheduler.bt_actions.condition_nodes import (
     IsNormalPoint,
     IsVisionPoint,
 )
-from rhw_task_scheduler.bt_actions.inference_action import TriggerInference
-from rhw_task_scheduler.bt_actions.navigate_action import CancelNavigation, NavigateToGoal
+from rhw_task_scheduler.bt_actions.navigate_action import NavigateToGoal
 from rhw_task_scheduler.bt_actions.ptz_actions import CaptureImage, PtzAbsoluteMove, WaitPtzStable
-from rhw_task_scheduler.debug_tools import safe_slug
+from rhw_task_scheduler.bt_utils import safe_slug
 from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
 
@@ -134,11 +132,9 @@ class MissionBtNode(Node):
         self._bb.register_key(key='/nav_retry_max', access=py_trees.common.Access.WRITE)
         self._bb.register_key(key='/battery_low', access=py_trees.common.Access.WRITE)
         self._bb.register_key(key='/last_capture_path', access=py_trees.common.Access.WRITE)
-        self._bb.register_key(key='/inference_result', access=py_trees.common.Access.WRITE)
         self._bb.set('/nav_retry_max', self._nav_retry_max)
         self._bb.set('/battery_low', False)
         self._bb.set('/last_capture_path', '')
-        self._bb.set('/inference_result', {})
 
         # ---- MQTT (可选) ----
         self._mqtt_client = None
@@ -191,15 +187,6 @@ class MissionBtNode(Node):
         self.declare_parameter('mqtt_mission_status_topic', 'rhw/mission/status')
         self.declare_parameter('mission_status_topic', '/mission/status')
         self.declare_parameter('get_waypoints_service', '/waypoint_manager/get_waypoints')
-        self.declare_parameter('debug_mock_enabled', False)
-        self.declare_parameter('debug_mock_delay_sec', 5.0)
-        self.declare_parameter('debug_mock_nav_result', 'success')
-        self.declare_parameter('debug_mock_ptz_result', 'success')
-        self.declare_parameter('debug_mock_capture_result', 'success')
-        self.declare_parameter('debug_mock_charge_result', 'success')
-        self.declare_parameter('debug_mock_inference_result', 'success')
-        self.declare_parameter('debug_mock_battery_level', 100.0)
-        self.declare_parameter('debug_mock_capture_dir', '/tmp/rhw_task_scheduler_mock_captures')
         self.declare_parameter('debug_print_tree_on_build', True)
         self.declare_parameter('debug_print_tree_on_tick', False)
         self.declare_parameter('debug_tree_show_status', True)
@@ -554,7 +541,7 @@ class MissionBtNode(Node):
         ├── CheckBattery
         ├── NavigateToGoal
         └── Selector [任务类型分支]
-            ├── Sequence [VISION: absolute_move → wait → capture → inference]
+            ├── Sequence [VISION: absolute_move → wait → capture]
             ├── Sequence [CHARGE: recharge]
             └── IsNormalPoint [NORMAL: 到达即完成]
         """
@@ -577,7 +564,6 @@ class MissionBtNode(Node):
         vision_seq.add_child(PtzAbsoluteMove('PtzAbsoluteMove', node=self))
         vision_seq.add_child(WaitPtzStable('WaitPtzStable', node=self))
         vision_seq.add_child(CaptureImage('CaptureImage', node=self))
-        vision_seq.add_child(TriggerInference('TriggerInference', node=self))
         task_selector.add_child(vision_seq)
 
         # 3b) 充电任务
@@ -771,4 +757,5 @@ def main() -> None:
     finally:
         executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
