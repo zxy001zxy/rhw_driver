@@ -180,12 +180,13 @@ ros2 service call /ptz/patrol rhw_msgs/srv/PtzPatrol \
 
 ```bash
 ros2 service call /ptz/absolute_move rhw_msgs/srv/PtzAbsoluteMove \
-  "{channel: 1, azimuth: 180.0, elevation: 0.0, azimuth_speed: 50, elevation_speed: 50}"
+  "{channel: 1, azimuth: 180.0, elevation: 0.0, zoom: 6.5, azimuth_speed: 50, elevation_speed: 50}"
 ```
 
 说明：
 
 - `rhw_task_scheduler` 中视觉点位的 `task_params` 推荐记录 `azimuth` / `elevation` 这组绝对位置参数
+- `zoom` 对应设备 ISAPI 的 `absoluteZoom` 原始值；传 `0` 表示不调整倍率
 - 视觉点位执行时应调用 `/ptz/absolute_move`，而不是依赖 `/ptz/goto_preset` 的 `preset_id`
 
 ### /ptz/get_position — 获取当前角度
@@ -200,6 +201,7 @@ ros2 service call /ptz/get_position rhw_msgs/srv/PtzGetPosition \
 | `result` | int8 | 0=失败 1=成功 |
 | `azimuth` | float32 | 方位角（水平，度） |
 | `elevation` | float32 | 俯仰角（垂直，度） |
+| `zoom` | float32 | 变倍位置/倍率值（设备 `absoluteZoom`/`zoom` 原始值） |
 | `message` | string | 结果说明 |
 
 ### /ptz/capture_image — 手动抓拍并保存
@@ -258,6 +260,7 @@ ros2 service call /ptz/capture_image rhw_msgs/srv/CaptureImage \
 | `channel` | uint8 | 通道号 |
 | `azimuth` | float32 | 当前方位角 |
 | `elevation` | float32 | 当前俯仰角 |
+| `zoom` | float32 | 当前变倍位置/倍率值 |
 | `active_action` | string | 当前动作（idle / patrol:N / moving / preset:N） |
 | `message` | string | 附加说明 |
 

@@ -1,5 +1,5 @@
 # 服务: /ptz/absolute_move
-# 绝对位置移动（方位角 + 俯仰角）
+# 绝对位置移动（方位角 + 俯仰角 + 可选变倍）
 
 # 通道号
 uint8 channel
@@ -9,6 +9,9 @@ float32 azimuth
 
 # 俯仰角（垂直，度）
 float32 elevation
+
+# 变倍位置/倍率值（设备 absoluteZoom 原始值），0 表示不指定
+float32 zoom
 
 # 水平移动速度 1-100，0 表示不指定
 uint8 azimuth_speed

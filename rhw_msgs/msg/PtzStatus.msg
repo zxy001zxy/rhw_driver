@@ -15,6 +15,9 @@ float32 azimuth
 # 当前俯仰角
 float32 elevation
 
+# 当前变倍位置/倍率值（设备 absoluteZoom/zoom 原始值）
+float32 zoom
+
 # 当前动作描述（idle / patrol / moving 等）
 string active_action
 

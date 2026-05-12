@@ -66,6 +66,17 @@ def _normalize_duration_ms(duration_ms: int) -> int:
     return value
 
 
+def _normalize_optional_zoom(zoom: float | None) -> float | None:
+    if zoom is None:
+        return None
+    value = float(zoom)
+    if value < 0:
+        raise PtzError("zoom must be >= 0", category="invalid_zoom")
+    if value == 0:
+        return None
+    return value
+
+
 def _local_name(tag: str) -> str:
     if "}" in tag:
         return tag.split("}", 1)[1]
@@ -127,6 +138,22 @@ def _json_find_text(data: Any, key: str) -> str | None:
         normalized = data.strip()
         if normalized.startswith(("http://", "https://", "/")):
             return normalized
+    return None
+
+
+def _json_find_number_any(data: Any, keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        found = _json_find_number(data, key)
+        if found is not None:
+            return found
+    return None
+
+
+def _find_float_any(root: ET.Element, names: tuple[str, ...]) -> float | None:
+    for name in names:
+        found = _to_float(_find_text(root, name))
+        if found is not None:
+            return found
     return None
 
 
@@ -508,17 +535,20 @@ class PtzController:
             )
             response = response_xml
 
+        zoom_keys = ("absoluteZoom", "zoom", "zoomPos", "zoomPosition")
         azimuth = None
         elevation = None
+        zoom = None
         if output.get("ok") and output.get("transport") == "json":
             try:
                 payload = response.json() if response is not None else {}
                 output["position_json"] = payload
                 azimuth = _json_find_number(payload, "azimuth")
                 elevation = _json_find_number(payload, "elevation")
+                zoom = _json_find_number_any(payload, zoom_keys)
             except ValueError:
                 pass
-        if azimuth is None or elevation is None:
+        if azimuth is None or elevation is None or zoom is None:
             try:
                 root = ET.fromstring(response.text) if response is not None and response.text else None
                 if root is not None:
@@ -526,6 +556,8 @@ class PtzController:
                         azimuth = _to_float(_find_text(root, "azimuth"))
                     if elevation is None:
                         elevation = _to_float(_find_text(root, "elevation"))
+                    if zoom is None:
+                        zoom = _find_float_any(root, zoom_keys)
             except ET.ParseError:
                 pass
 
@@ -533,6 +565,8 @@ class PtzController:
             output["azimuth"] = azimuth
         if elevation is not None:
             output["elevation"] = elevation
+        if zoom is not None:
+            output["zoom"] = zoom
         return output
 
     def _absolute_ex_xml_payload(
@@ -545,6 +579,7 @@ class PtzController:
         tilt_speed_tag: str,
         azimuth_speed: int | None,
         elevation_speed: int | None,
+        zoom: float | None,
     ) -> str:
         parts = [
             '<?xml version="1.0" encoding="UTF-8"?>',
@@ -552,6 +587,8 @@ class PtzController:
             f"<azimuth>{_number_text(azimuth)}</azimuth>",
             f"<elevation>{_number_text(elevation)}</elevation>",
         ]
+        if zoom is not None:
+            parts.append(f"<absoluteZoom>{_number_text(zoom)}</absoluteZoom>")
         if azimuth_speed is not None:
             parts.append(f"<{pan_speed_tag}>{azimuth_speed}</{pan_speed_tag}>")
         if elevation_speed is not None:
@@ -565,12 +602,14 @@ class PtzController:
         channel: int = 1,
         azimuth: float,
         elevation: float,
+        zoom: float | None = None,
         azimuth_speed: int | None = None,
         elevation_speed: int | None = None,
     ) -> Dict[str, object]:
         normalized_channel = _normalize_channel(channel)
         normalized_azimuth = float(azimuth)
         normalized_elevation = float(elevation)
+        normalized_zoom = _normalize_optional_zoom(zoom)
         normalized_azimuth_speed = _normalize_speed(azimuth_speed) if azimuth_speed is not None else None
         normalized_elevation_speed = _normalize_speed(elevation_speed) if elevation_speed is not None else None
 
@@ -581,6 +620,8 @@ class PtzController:
                 "elevation": _number_literal(normalized_elevation),
             }
         }
+        if normalized_zoom is not None:
+            json_body["AbsoluteEx"]["absoluteZoom"] = _number_literal(normalized_zoom)
         if normalized_azimuth_speed is not None:
             json_body["AbsoluteEx"]["azimuthSpeed"] = normalized_azimuth_speed
         if normalized_elevation_speed is not None:
@@ -600,6 +641,7 @@ class PtzController:
                 "channel": normalized_channel,
                 "azimuth": normalized_azimuth,
                 "elevation": normalized_elevation,
+                "zoom": normalized_zoom,
                 "azimuth_speed": normalized_azimuth_speed,
                 "elevation_speed": normalized_elevation_speed,
             },
@@ -627,6 +669,7 @@ class PtzController:
                 tilt_speed_tag=tilt_speed_tag,
                 azimuth_speed=normalized_azimuth_speed,
                 elevation_speed=normalized_elevation_speed,
+                zoom=normalized_zoom,
             )
             xml_response = self._request(
                 method="PUT",
@@ -642,6 +685,7 @@ class PtzController:
                     "channel": normalized_channel,
                     "azimuth": normalized_azimuth,
                     "elevation": normalized_elevation,
+                    "zoom": normalized_zoom,
                     "azimuth_speed": normalized_azimuth_speed,
                     "elevation_speed": normalized_elevation_speed,
                     "xml_root": root_name,

@@ -75,6 +75,7 @@ class PtzControllerNode(Node):
         self._online = False
         self._last_azimuth: float = 0.0
         self._last_elevation: float = 0.0
+        self._last_zoom: float = 0.0
         self._active_action: str = 'idle'
 
         self.get_logger().info(
@@ -190,6 +191,7 @@ class PtzControllerNode(Node):
         channel = int(request.channel) if request.channel else self._default_channel
         azimuth = float(request.azimuth)
         elevation = float(request.elevation)
+        zoom: Optional[float] = float(request.zoom) if request.zoom else None
         azimuth_speed: Optional[int] = int(request.azimuth_speed) if request.azimuth_speed else None
         elevation_speed: Optional[int] = int(request.elevation_speed) if request.elevation_speed else None
 
@@ -198,6 +200,7 @@ class PtzControllerNode(Node):
                 channel=channel,
                 azimuth=azimuth,
                 elevation=elevation,
+                zoom=zoom,
                 azimuth_speed=azimuth_speed,
                 elevation_speed=elevation_speed,
             )
@@ -233,14 +236,18 @@ class PtzControllerNode(Node):
             if ok:
                 azimuth = result.get('azimuth')
                 elevation = result.get('elevation')
+                zoom = result.get('zoom')
                 response.azimuth = float(azimuth) if azimuth is not None else 0.0
                 response.elevation = float(elevation) if elevation is not None else 0.0
+                response.zoom = float(zoom) if zoom is not None else 0.0
                 self._last_azimuth = response.azimuth
                 self._last_elevation = response.elevation
+                self._last_zoom = response.zoom
                 self._online = True
             else:
                 response.azimuth = 0.0
                 response.elevation = 0.0
+                response.zoom = 0.0
 
             response.message = self._extract_message(result)
             return response
@@ -248,12 +255,14 @@ class PtzControllerNode(Node):
             response.result = 0
             response.azimuth = 0.0
             response.elevation = 0.0
+            response.zoom = 0.0
             response.message = f'[{exc.category}] {exc}'
             return response
         except Exception as exc:
             response.result = 0
             response.azimuth = 0.0
             response.elevation = 0.0
+            response.zoom = 0.0
             response.message = str(exc)
             return response
 
@@ -390,8 +399,10 @@ class PtzControllerNode(Node):
             if ok:
                 azimuth = result.get('azimuth')
                 elevation = result.get('elevation')
+                zoom = result.get('zoom')
                 self._last_azimuth = float(azimuth) if azimuth is not None else self._last_azimuth
                 self._last_elevation = float(elevation) if elevation is not None else self._last_elevation
+                self._last_zoom = float(zoom) if zoom is not None else self._last_zoom
                 self._online = True
             else:
                 self._online = False
@@ -401,6 +412,7 @@ class PtzControllerNode(Node):
         msg.online = self._online
         msg.azimuth = self._last_azimuth
         msg.elevation = self._last_elevation
+        msg.zoom = self._last_zoom
         msg.active_action = self._active_action
         msg.message = 'ok' if self._online else 'camera unreachable'
         self._status_pub.publish(msg)

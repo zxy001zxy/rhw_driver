@@ -15,5 +15,8 @@ float32 azimuth
 # 俯仰角（垂直，度）
 float32 elevation
 
+# 变倍位置/倍率值（设备 absoluteZoom/zoom 原始值）
+float32 zoom
+
 # 结果说明
 string message
