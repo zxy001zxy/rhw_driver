@@ -73,7 +73,7 @@ def _duration_ms(req_time: float | None) -> float | None:
     return (time.time() - req_time) * 1000 if req_time else None
 
 
-def _abandon_future(client, future) -> None:
+def _abandon_future(client, future, logger=None) -> None:
     if future is None:
         return
 
@@ -81,18 +81,20 @@ def _abandon_future(client, future) -> None:
     if callable(remove_pending_request):
         try:
             remove_pending_request(future)
-        except Exception:
+        except Exception as exc:
+            _debug_log(logger, f'Future remove_pending_request failed: {exc}')
             pass
 
     cancel = getattr(future, 'cancel', None)
     if callable(cancel):
         try:
             cancel()
-        except Exception:
+        except Exception as exc:
+            _debug_log(logger, f'Future cancel failed: {exc}')
             pass
 
 
-def _future_is_pending(future) -> bool:
+def _future_is_pending(future, logger=None) -> bool:
     if future is None:
         return False
 
@@ -102,7 +104,8 @@ def _future_is_pending(future) -> bool:
 
     try:
         return not done()
-    except Exception:
+    except Exception as exc:
+        _debug_log(logger, f'Future done status check failed: {exc}')
         return True
 
 
@@ -213,13 +216,14 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
             duration_ms=_duration_ms(self._req_time),
             details={'error': reason},
         )
-        _abandon_future(self._client, self._future)
+        _abandon_future(self._client, self._future, logger=self._node.get_logger())
         self._future = None
         self._node.get_logger().warning(reason)
         return py_trees.common.Status.FAILURE
 
     def _interrupt_pending_future(self, reason: str) -> None:
-        if not _future_is_pending(self._future):
+        logger = self._node.get_logger()
+        if not _future_is_pending(self._future, logger=logger):
             self._future = None
             return
 
@@ -231,9 +235,9 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
             duration_ms=_duration_ms(self._req_time),
             details={'error': reason},
         )
-        _abandon_future(self._client, self._future)
+        _abandon_future(self._client, self._future, logger=logger)
         self._future = None
-        self._node.get_logger().warning(reason)
+        logger.warning(reason)
 
     def terminate(self, new_status: py_trees.common.Status) -> None:
         if new_status == py_trees.common.Status.INVALID:
@@ -394,13 +398,14 @@ class RunModelTask(py_trees.behaviour.Behaviour):
             duration_ms=_duration_ms(self._req_time),
             details={'error': reason},
         )
-        _abandon_future(self._client, self._future)
+        _abandon_future(self._client, self._future, logger=self._node.get_logger())
         self._future = None
         self._node.get_logger().warning(reason)
         return py_trees.common.Status.FAILURE
 
     def _interrupt_pending_future(self, reason: str) -> None:
-        if not _future_is_pending(self._future):
+        logger = self._node.get_logger()
+        if not _future_is_pending(self._future, logger=logger):
             self._future = None
             return
 
@@ -412,9 +417,9 @@ class RunModelTask(py_trees.behaviour.Behaviour):
             duration_ms=_duration_ms(self._req_time),
             details={'error': reason},
         )
-        _abandon_future(self._client, self._future)
+        _abandon_future(self._client, self._future, logger=logger)
         self._future = None
-        self._node.get_logger().warning(reason)
+        logger.warning(reason)
 
     def terminate(self, new_status: py_trees.common.Status) -> None:
         if new_status == py_trees.common.Status.INVALID:
