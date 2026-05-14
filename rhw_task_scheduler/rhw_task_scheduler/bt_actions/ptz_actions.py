@@ -170,7 +170,9 @@ class CaptureImage(py_trees.behaviour.Behaviour):
     """调用 /ptz/capture_image 抓拍.
 
     写入 Blackboard:
-        /last_capture_path  — str (抓拍文件路径)
+        /last_capture_path       — str (抓拍文件路径)
+        /last_capture_url        — str (设备抓拍 URL)
+        /last_capture_file_size  — int (图片大小，字节)
     """
 
     def __init__(self, name: str, node: Node, **kwargs):
@@ -179,6 +181,8 @@ class CaptureImage(py_trees.behaviour.Behaviour):
         self._bb = self.attach_blackboard_client()
         self._bb.register_key(key='/current_waypoint', access=py_trees.common.Access.READ)
         self._bb.register_key(key='/last_capture_path', access=py_trees.common.Access.WRITE)
+        self._bb.register_key(key='/last_capture_url', access=py_trees.common.Access.WRITE)
+        self._bb.register_key(key='/last_capture_file_size', access=py_trees.common.Access.WRITE)
 
         if hasattr(self._node, '_service_audit'):
             self._audit = self._node._service_audit
@@ -212,7 +216,9 @@ class CaptureImage(py_trees.behaviour.Behaviour):
                     duration_ms=duration,
                 )
                 if result.result == 1:
-                    self._bb.set('/last_capture_path', result.file_path)
+                    self._bb.set('/last_capture_path', str(result.file_path))
+                    self._bb.set('/last_capture_url', str(result.capture_url))
+                    self._bb.set('/last_capture_file_size', int(result.file_size))
                     self._node.get_logger().info(f'Capture saved: {result.file_path}')
                     return py_trees.common.Status.SUCCESS
                 self._node.get_logger().warning(f'Capture failed: {result.message}')

@@ -132,9 +132,15 @@ class MissionBtNode(Node):
         self._bb.register_key(key='/nav_retry_max', access=py_trees.common.Access.WRITE)
         self._bb.register_key(key='/battery_low', access=py_trees.common.Access.WRITE)
         self._bb.register_key(key='/last_capture_path', access=py_trees.common.Access.WRITE)
+        self._bb.register_key(key='/last_capture_url', access=py_trees.common.Access.WRITE)
+        self._bb.register_key(key='/last_capture_file_size', access=py_trees.common.Access.WRITE)
+        self._bb.register_key(key='/last_model_result_json_path', access=py_trees.common.Access.WRITE)
         self._bb.set('/nav_retry_max', self._nav_retry_max)
         self._bb.set('/battery_low', False)
         self._bb.set('/last_capture_path', '')
+        self._bb.set('/last_capture_url', '')
+        self._bb.set('/last_capture_file_size', 0)
+        self._bb.set('/last_model_result_json_path', '')
 
         # ---- MQTT (可选) ----
         self._mqtt_client = None
@@ -511,6 +517,9 @@ class MissionBtNode(Node):
         self._bb.set('/current_waypoint', wp)
         self._bb.set('/nav_result', '')
         self._bb.set('/last_capture_path', '')
+        self._bb.set('/last_capture_url', '')
+        self._bb.set('/last_capture_file_size', 0)
+        self._bb.set('/last_model_result_json_path', '')
 
         tree = self._build_waypoint_tree()
         with self._bt_lock:
