@@ -22,7 +22,7 @@ setup(
     entry_points={
         'console_scripts': [
             'udp_bridge_node = rhw_udp_mqtt_bridge.udp_bridge_node:main',
-            'mqtt_forwarder_node = rhw_udp_mqtt_bridge.mqtt_forwarder_node:main',
+            'mqtt_gateway_node = rhw_udp_mqtt_bridge.mqtt_gateway_node:main',
             'inspection_reporter_node = rhw_udp_mqtt_bridge.inspection_reporter_node:main',
         ],
     },

@@ -79,6 +79,11 @@ ros2 run rhw_ptz_controller camera_publisher_node
 | `default_duration_ms` | int | `350` | 默认持续时间(ms)，0=持续到手动stop |
 | `status_publish_period` | float | `2.0` | 状态发布周期(秒) |
 | `capture_save_dir` | string | `/tmp/ptz_captures` | 抓拍图片默认保存目录 |
+| `absolute_move_wait_until_reached` | bool | `true` | `/ptz/absolute_move` 是否等待到位后再返回 |
+| `absolute_move_timeout_sec` | float | `15.0` | 绝对移动等待到位超时(秒) |
+| `absolute_move_poll_period_sec` | float | `0.5` | 查询当前位置间隔(秒) |
+| `absolute_move_angle_tolerance_deg` | float | `1.0` | 方位角/俯仰角到位容差(度) |
+| `absolute_move_zoom_tolerance` | float | `0.2` | 变倍位置到位容差 |
 
 ### camera_publisher_node 参数
 
@@ -183,10 +188,19 @@ ros2 service call /ptz/absolute_move rhw_msgs/srv/PtzAbsoluteMove \
   "{channel: 1, azimuth: 180.0, elevation: 0.0, zoom: 6.5, azimuth_speed: 50, elevation_speed: 50}"
 ```
 
+响应字段：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `result` | int8 | `1` 表示已移动到目标容差范围内；`0` 表示命令失败或等待到位超时 |
+| `message` | string | 到位结果、当前位置误差或失败原因 |
+
 说明：
 
 - `rhw_task_scheduler` 中视觉点位的 `task_params` 推荐记录 `azimuth` / `elevation` 这组绝对位置参数
 - `zoom` 对应设备 ISAPI 的 `absoluteZoom` 原始值；传 `0` 表示不调整倍率
+- 默认 `absolute_move_wait_until_reached=true`，服务会先发送绝对移动命令，再轮询当前位置，确认方位角/俯仰角进入容差范围后才返回成功
+- 如果设备不返回当前 `zoom`，到位判断只校验方位角和俯仰角
 - 视觉点位执行时应调用 `/ptz/absolute_move`，而不是依赖 `/ptz/goto_preset` 的 `preset_id`
 
 ### /ptz/get_position — 获取当前角度

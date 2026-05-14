@@ -1,19 +1,19 @@
 # rhw_udp_mqtt_bridge
 
-用于解析 UDP 信息并发布为结构化 ROS 2 话题，以及后续将 ROS 2 话题转发为 MQTT 协议。
+用于解析 UDP 信息并发布为结构化 ROS 2 话题，同时作为机器人对接平台的统一 MQTT 网关。
 
 ## 当前状态
 
 当前已完成：
 
 - `UDP -> ROS 2`：解析并发布 `Command 4/5/6` 结构化状态话题
-- `ROS 2 -> MQTT`：新增 `mqtt_forwarder_node`，按约定格式上报设备心跳
+- `ROS 2 <-> MQTT`：`mqtt_gateway_node` 统一处理心跳、点位同步、任务下发、任务状态上报
 - `ROS 2 -> HTTPS`：`inspection_reporter_node` 订阅抓拍结果，或通过同步 service 上报平台相册接口
 
 ## 当前模块
 
 - `udp_bridge_node`：监听 UDP 数据、筛选 `Command 4/5/6`，并发布结构化状态话题
-- `mqtt_forwarder_node`：订阅 `/robot/basic_status`、`/robot/battery_status`、`/robot_position`、`/mission/status`，组装 MQTT 心跳消息并上报
+- `mqtt_gateway_node`：使用单个 MQTT client 连接平台，订阅/发布平台协议 topic，并调用/订阅 ROS 2 任务与点位接口
 - `inspection_reporter_node`：订阅 `/inspection/album_reports`，并提供 `/inspection/album_report/upload` 同步 service，按第六节 HTTPS 相册接口上报巡检抓拍结果
 
 ## 已保留的 UDP 指令
@@ -38,9 +38,16 @@
 | UDP Command 5 | `Items.BatteryStatus` | `/robot/battery_status` | `rhw_msgs/UdpBatteryStatus` |
 | UDP Command 6 | `Items.BasicStatus` | `/robot/basic_status` | `rhw_msgs/UdpBasicStatus` |
 
-## 已实现 MQTT 心跳映射
+## 已实现 MQTT 网关
 
-`mqtt_forwarder_node` 当前按以下规则组装 MQTT 心跳：
+`mqtt_gateway_node` 当前处理：
+
+- 心跳上报：订阅 `/robot/basic_status`、`/robot/battery_status`、`/robot_position`、`/mission/status`，向 `upload_topic` 发布 `method=heart`
+- 点位同步：订阅 `/waypoint_manager/events`，调用 `/waypoint_manager/get_waypoints`，向 `upload_topic` 发布 `method=map`
+- 任务下发：订阅 MQTT `download_topic`，收到 `method=task` 后调用 `/mission/start`
+- 任务状态：订阅 `/mission/status`，向 `upload_topic` 发布 `method=task`
+
+心跳字段映射：
 
 | MQTT 字段 | 当前来源/规则 |
 |---|---|
@@ -63,7 +70,7 @@
 - 当前节点只发布结构化消息，不再输出原始 JSON 话题。
 - 字段名兼容大小写与下划线/驼峰两种常见写法（如 `Roll`/`roll`、`LineX`/`line_x`）。
 - 若后续还需 `/odom`、硬件聚合状态或版本话题，可在现有结构上继续扩展。
-- 当前 `mqtt_forwarder_node` 将 `/robot_position` 和 `/mission/status` 作为必需输入；未收到这些状态前不会发送 MQTT 心跳。
+- 当前 `mqtt_gateway_node` 将 `/robot_position` 和 `/mission/status` 作为心跳必需输入；未收到这些状态前不会发送 MQTT 心跳。
 
 ## 启动
 
@@ -71,16 +78,16 @@
 ros2 launch rhw_udp_mqtt_bridge udp_bridge.launch.py
 ```
 
-如果同时启动 MQTT 心跳转发：
+如果同时启动 MQTT 网关：
 
 ```bash
-ros2 launch rhw_udp_mqtt_bridge udp_bridge.launch.py enable_mqtt_forwarder:=true
+ros2 launch rhw_udp_mqtt_bridge udp_bridge.launch.py enable_mqtt_gateway:=true
 ```
 
 也可以单独启动：
 
 ```bash
-ros2 run rhw_udp_mqtt_bridge mqtt_forwarder_node
+ros2 run rhw_udp_mqtt_bridge mqtt_gateway_node
 ```
 
 巡检抓拍 HTTPS 上报节点单独启动：
@@ -101,13 +108,19 @@ ros2 run rhw_udp_mqtt_bridge inspection_reporter_node
 - `basic_status_topic` / `motion_status_topic` / `battery_status_topic`：结构化状态话题
 - `status_frame_id`：结构化消息头 `header.frame_id`
 - `debug_log_sender`：调试模式下打印收到的 UDP sender 地址与过滤结果
-- `mqtt_topic`：MQTT 心跳上报 topic
+- `upload_topic`：MQTT 上行 topic，如 `/robot-dog/DOG001/Upload/Data`
+- `download_topic`：MQTT 下行 topic，如 `/robot-dog/DOG001/Download/Data`
+- `client_id`：MQTT client ID，同一个 broker 下必须唯一
 - `heartbeat_publish_period_sec`：MQTT 心跳发布周期
 - `status_timeout_sec`：超过该时间未收到必需状态则心跳标记离线
 - `default_signal_strength`：当前默认 WiFi 信号强度
 - `map_id`：MQTT 心跳中的位置地图 ID
 - `robot_position_topic`：位置输入话题，默认 `/robot_position`
 - `mission_status_topic`：任务状态输入话题，默认 `/mission/status`
+- `waypoint_event_topic`：点位变更事件，默认 `/waypoint_manager/events`
+- `mission_start_service`：任务启动服务，默认 `/mission/start`
+- `get_waypoints_service`：点位查询服务，默认 `/waypoint_manager/get_waypoints`
+- `default_task_map_name`：平台任务未带 `mapName` 时使用的默认地图名
 - `inspection_reporter_node.album_report_topic`：抓拍结果输入话题，默认 `/inspection/album_reports`
 - `inspection_reporter_node.album_upload_service`：同步相册上传服务，默认 `/inspection/album_report/upload`
 - `inspection_reporter_node.album_report_url`：平台相册上报接口，如 `https://ip:port/robot-inspect/inspect/album/report`
@@ -178,7 +191,7 @@ rhw_udp_mqtt_bridge/
 └── rhw_udp_mqtt_bridge/
     ├── __init__.py
     ├── udp_bridge_node.py
-    ├── mqtt_forwarder_node.py
+    ├── mqtt_gateway_node.py
     └── inspection_reporter_node.py
 ```
 

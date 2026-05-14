@@ -7,16 +7,8 @@ waypoint_manager:
     # 航点持久化目录
     storage_dir: "~/.rhw/waypoints"
 
-    # MQTT 点位主动同步
-    mqtt_sync_enabled: true
-    mqtt_broker_host: "8.130.34.168"
-    mqtt_broker_port: 1883
-    mqtt_client_id: "robot-inspect-forwarder"
-    mqtt_username: "admin"
-    mqtt_password: "public"
-    mqtt_waypoint_sync_topic: "/robot-dog/DOG001/Upload/Data"
-    mqtt_qos: 1
-    mqtt_keep_alive_sec: 60
+    # 点位变更事件（由 MQTT 网关统一转发）
+    waypoint_event_topic: "/waypoint_manager/events"
 
     # 服务名
     add_waypoint_service: "/waypoint_manager/add_waypoint"
@@ -35,15 +27,21 @@ mission_bt_node:
     debug_tree_output_dir: "/tmp/rhw_task_scheduler_bt"
 
     # ---------- 导航 ----------
-    goal_service: "/move_base_simple/goal"
-    cancel_service: "/move_base/cancel"
-    nav_status_topic: "/navigation_status"
     nav_retry_max: 3
+    navigation_frame_id: "map"
+    navigate_to_pose_action: "/navigate_to_pose"
+    nav2_behavior_tree: ""
+    follow_path_action: "/follow_path"
+    follow_path_controller_id: ""
+    follow_path_goal_checker_id: ""
+    follow_path_progress_checker_id: ""
 
     # ---------- PTZ ----------
     ptz_absolute_move_service: "/ptz/absolute_move"
     ptz_capture_service: "/ptz/capture_image"
     ptz_status_topic: "/ptz/status"
+    nav_arrived_to_ptz_delay_sec: 0.0      # 导航到位后，开始移动云台前的固定停顿
+    ptz_arrived_to_capture_delay_sec: 5.0  # 云台到位/稳定后，拍照前的固定停顿
     ptz_stable_timeout_sec: 5.0
     default_ptz_channel: 1
 
@@ -57,16 +55,9 @@ mission_bt_node:
     # ---------- 任务超时 ----------
     waypoint_task_timeout_sec: 120.0
 
-    # ---------- MQTT ----------
-    mqtt_enabled: false
-    mqtt_broker_host: "127.0.0.1"
-    mqtt_broker_port: 1883
-    mqtt_client_id: "rhw_mission_bt"
-    mqtt_mission_start_topic: "rhw/mission/start"
-    mqtt_mission_status_topic: "rhw/mission/status"
-
     # ---------- 话题 ----------
     mission_status_topic: "/mission/status"
+    inspection_album_report_topic: "/inspection/album_reports"
     inspection_album_upload_service: "/inspection/album_report/upload"
     album_upload_timeout_sec: 30.0
     model_task_run_service: "/rhw/model/task/run"

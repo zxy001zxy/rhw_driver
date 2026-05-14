@@ -90,16 +90,6 @@ def launch_setup(context, *args, **kwargs):
                 '/test/waypoint_manager/get_waypoints',
                 use_real_waypoints,
             ),
-            'goal_service': _service_name(
-                '/move_base_simple/goal',
-                '/test/move_base_simple/goal',
-                use_real_navigation,
-            ),
-            'nav_status_topic': _service_name(
-                '/navigation_status',
-                '/test/navigation_status',
-                use_real_navigation,
-            ),
             'ptz_absolute_move_service': _service_name(
                 '/ptz/absolute_move',
                 '/test/ptz/absolute_move',
