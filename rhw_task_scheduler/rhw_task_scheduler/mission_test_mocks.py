@@ -19,7 +19,15 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
 from rhw_msgs.msg import NavigationStatus, PtzStatus, UdpBatteryStatus, WaypointTask
-from rhw_msgs.srv import CaptureImage, Goal, GetWaypoints, PtzAbsoluteMove, Recharge
+from rhw_msgs.srv import (
+    CaptureImage,
+    Goal,
+    GetWaypoints,
+    InspectionAlbumUpload,
+    ModelTaskRun,
+    PtzAbsoluteMove,
+    Recharge,
+)
 from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
 
@@ -50,6 +58,8 @@ class MissionTestMocks(Node):
         self._goal_srv = None
         self._ptz_move_srv = None
         self._ptz_capture_srv = None
+        self._album_upload_srv = None
+        self._model_task_srv = None
         self._recharge_srv = None
         self._battery_timer = None
 
@@ -66,6 +76,8 @@ class MissionTestMocks(Node):
         self.declare_parameter('use_real_ptz', True)
         self.declare_parameter('use_real_recharge', False)
         self.declare_parameter('use_real_battery', False)
+        self.declare_parameter('use_real_album_upload', False)
+        self.declare_parameter('use_real_model_task', False)
 
         self.declare_parameter('map_name', 'factory_map')
         self.declare_parameter('waypoints_json', '')
@@ -78,6 +90,11 @@ class MissionTestMocks(Node):
         self.declare_parameter('ptz_status_topic', '/test/ptz/status')
         self.declare_parameter('recharge_service', '/test/recharge')
         self.declare_parameter('battery_topic', '/test/robot/battery_status')
+        self.declare_parameter(
+            'album_upload_service',
+            '/test/inspection/album_report/upload',
+        )
+        self.declare_parameter('model_task_run_service', '/test/rhw/model/task/run')
 
         self.declare_parameter('default_ptz_channel', 1)
         self.declare_parameter('navigation_delay_sec', 1.2)
@@ -87,6 +104,8 @@ class MissionTestMocks(Node):
         self.declare_parameter('navigation_result', 'reached')
         self.declare_parameter('recharge_result', 1)
         self.declare_parameter('capture_save_dir', '/tmp/rhw_task_scheduler_mock')
+        self.declare_parameter('album_upload_result', True)
+        self.declare_parameter('model_task_result', True)
 
     def _read_parameters(self) -> None:
         self._use_real_waypoints = bool(self.get_parameter('use_real_waypoints').value)
@@ -94,6 +113,10 @@ class MissionTestMocks(Node):
         self._use_real_ptz = bool(self.get_parameter('use_real_ptz').value)
         self._use_real_recharge = bool(self.get_parameter('use_real_recharge').value)
         self._use_real_battery = bool(self.get_parameter('use_real_battery').value)
+        self._use_real_album_upload = bool(
+            self.get_parameter('use_real_album_upload').value
+        )
+        self._use_real_model_task = bool(self.get_parameter('use_real_model_task').value)
 
         self._map_name = str(self.get_parameter('map_name').value)
         self._waypoints_json = str(self.get_parameter('waypoints_json').value)
@@ -108,6 +131,12 @@ class MissionTestMocks(Node):
         self._ptz_status_topic = str(self.get_parameter('ptz_status_topic').value)
         self._recharge_service = str(self.get_parameter('recharge_service').value)
         self._battery_topic = str(self.get_parameter('battery_topic').value)
+        self._album_upload_service = str(
+            self.get_parameter('album_upload_service').value
+        )
+        self._model_task_run_service = str(
+            self.get_parameter('model_task_run_service').value
+        )
 
         self._default_ptz_channel = int(self.get_parameter('default_ptz_channel').value)
         self._navigation_delay_sec = max(
@@ -125,6 +154,10 @@ class MissionTestMocks(Node):
         self._capture_save_dir = Path(
             str(self.get_parameter('capture_save_dir').value)
         ).expanduser()
+        self._album_upload_result = bool(
+            self.get_parameter('album_upload_result').value
+        )
+        self._model_task_result = bool(self.get_parameter('model_task_result').value)
 
     def _setup_interfaces(self) -> None:
         if not self._use_real_waypoints:
@@ -164,6 +197,22 @@ class MissionTestMocks(Node):
             )
             self._publish_ptz_status(active_action='idle', message='mock ptz ready')
 
+        if not self._use_real_album_upload:
+            self._album_upload_srv = self.create_service(
+                InspectionAlbumUpload,
+                self._album_upload_service,
+                self._handle_album_upload,
+                callback_group=self._callback_group,
+            )
+
+        if not self._use_real_model_task:
+            self._model_task_srv = self.create_service(
+                ModelTaskRun,
+                self._model_task_run_service,
+                self._handle_model_task_run,
+                callback_group=self._callback_group,
+            )
+
         if not self._use_real_recharge:
             self._recharge_srv = self.create_service(
                 Recharge,
@@ -186,6 +235,8 @@ class MissionTestMocks(Node):
             f'waypoints={not self._use_real_waypoints} '
             f'nav={not self._use_real_navigation} '
             f'ptz={not self._use_real_ptz} '
+            f'album_upload={not self._use_real_album_upload} '
+            f'model_task={not self._use_real_model_task} '
             f'recharge={not self._use_real_recharge} '
             f'battery={not self._use_real_battery}'
         )
@@ -251,6 +302,7 @@ class MissionTestMocks(Node):
                             'channel': self._default_ptz_channel,
                             'azimuth_speed': 50,
                             'elevation_speed': 50,
+                            'inference_type': 'fire_equipment_detection',
                         },
                         ensure_ascii=False,
                     ),
@@ -553,6 +605,87 @@ class MissionTestMocks(Node):
             details={'file_path': save_path, 'file_size': len(payload)},
         )
         self.get_logger().info(f'CaptureImage saved mock file: {save_path}')
+        return response
+
+    def _handle_album_upload(
+        self,
+        request: InspectionAlbumUpload.Request,
+        response: InspectionAlbumUpload.Response,
+    ) -> InspectionAlbumUpload.Response:
+        started_at = time.monotonic()
+        self._audit.publish(
+            service=self._album_upload_service,
+            role='server',
+            phase='request',
+            request=request,
+        )
+
+        response.ok = bool(self._album_upload_result)
+        response.code = 'OK' if response.ok else 'MOCK_UPLOAD_FAILED'
+        response.message = (
+            'mock album upload ok' if response.ok else 'mock album upload failed'
+        )
+        response.trace_id = f'mock-{time.time_ns()}'
+        response.http_status = 200 if response.ok else 500
+        response.response_body = '{"code":0}' if response.ok else '{"code":500}'
+
+        self._audit.publish(
+            service=self._album_upload_service,
+            role='server',
+            phase='response',
+            request=request,
+            response=response,
+            success=response.ok,
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+        )
+        self.get_logger().info(
+            f'InspectionAlbumUpload result={response.ok} image={request.image_path}'
+        )
+        return response
+
+    def _handle_model_task_run(
+        self,
+        request: ModelTaskRun.Request,
+        response: ModelTaskRun.Response,
+    ) -> ModelTaskRun.Response:
+        started_at = time.monotonic()
+        self._audit.publish(
+            service=self._model_task_run_service,
+            role='server',
+            phase='request',
+            request=request,
+        )
+
+        response.ok = bool(self._model_task_result)
+        response.code = 'OK' if response.ok else 'MOCK_MODEL_FAILED'
+        response.message = 'mock model task ok' if response.ok else 'mock model task failed'
+        response.request_id = str(request.request_id)
+        response.task_name = str(request.task_name)
+        response.task_type = 'mock'
+        response.model_path = '/tmp/mock_model.engine'
+        response.backend = 'mock'
+        response.frame_path = '/tmp/mock_frame.jpg'
+        response.result_json_path = f'/tmp/mock_model_result_{request.request_id}.json'
+        response.item_count = 1 if response.ok else 0
+        response.error_count = 0 if response.ok else 1
+        response.latency_ms = 12.3
+        response.error_category = '' if response.ok else 'mock_error'
+        response.detail_json = (
+            '{"items":[{"label":"mock","score":0.99}]}' if response.ok else '{}'
+        )
+
+        self._audit.publish(
+            service=self._model_task_run_service,
+            role='server',
+            phase='response',
+            request=request,
+            response=response,
+            success=response.ok,
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+        )
+        self.get_logger().info(
+            f'ModelTaskRun result={response.ok} task_name={request.task_name}'
+        )
         return response
 
     def _handle_recharge(

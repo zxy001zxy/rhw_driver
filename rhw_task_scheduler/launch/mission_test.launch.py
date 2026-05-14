@@ -30,6 +30,18 @@ def launch_setup(context, *args, **kwargs):
     use_real_ptz = _as_bool(LaunchConfiguration('use_real_ptz').perform(context))
     use_real_recharge = _as_bool(LaunchConfiguration('use_real_recharge').perform(context))
     use_real_battery = _as_bool(LaunchConfiguration('use_real_battery').perform(context))
+    use_real_album_upload = _as_bool(
+        LaunchConfiguration('use_real_album_upload').perform(context)
+    )
+    use_real_model_task = _as_bool(
+        LaunchConfiguration('use_real_model_task').perform(context)
+    )
+    album_upload_result = _as_bool(
+        LaunchConfiguration('album_upload_result').perform(context)
+    )
+    model_task_result = _as_bool(
+        LaunchConfiguration('model_task_result').perform(context)
+    )
     launch_waypoint_manager = _as_bool(
         LaunchConfiguration('launch_waypoint_manager').perform(context)
     )
@@ -60,6 +72,10 @@ def launch_setup(context, *args, **kwargs):
                 'use_real_ptz': use_real_ptz,
                 'use_real_recharge': use_real_recharge,
                 'use_real_battery': use_real_battery,
+                'use_real_album_upload': use_real_album_upload,
+                'use_real_model_task': use_real_model_task,
+                'album_upload_result': album_upload_result,
+                'model_task_result': model_task_result,
                 'map_name': LaunchConfiguration('map_name').perform(context),
                 'waypoints_json': LaunchConfiguration('waypoints_json').perform(context),
             }
@@ -108,6 +124,16 @@ def launch_setup(context, *args, **kwargs):
                 '/robot/battery_status',
                 '/test/robot/battery_status',
                 use_real_battery,
+            ),
+            'inspection_album_upload_service': _service_name(
+                '/inspection/album_report/upload',
+                '/test/inspection/album_report/upload',
+                use_real_album_upload,
+            ),
+            'model_task_run_service': _service_name(
+                '/rhw/model/task/run',
+                '/test/rhw/model/task/run',
+                use_real_model_task,
             ),
             'debug_print_tree_on_build': True,
             'debug_print_tree_on_tick': False,
@@ -164,6 +190,26 @@ def generate_launch_description() -> LaunchDescription:
                 'use_real_battery',
                 default_value='false',
                 description='Use the real battery topic',
+            ),
+            DeclareLaunchArgument(
+                'use_real_album_upload',
+                default_value='false',
+                description='Use the real inspection album upload service',
+            ),
+            DeclareLaunchArgument(
+                'use_real_model_task',
+                default_value='false',
+                description='Use the real model task run service',
+            ),
+            DeclareLaunchArgument(
+                'album_upload_result',
+                default_value='true',
+                description='Mock album upload success or failure',
+            ),
+            DeclareLaunchArgument(
+                'model_task_result',
+                default_value='true',
+                description='Mock model task success or failure',
             ),
             DeclareLaunchArgument(
                 'launch_waypoint_manager',
