@@ -18,28 +18,54 @@ MODEL_TASK_TIMEOUT_SEC = 60.0
 UINT32_MAX = 4294967295
 
 
+def _debug_log(logger, message: str) -> None:
+    debug = getattr(logger, 'debug', None)
+    if not callable(debug):
+        return
+    try:
+        debug(message)
+    except Exception:
+        pass
+
+
+def _node_debug(node: Node, message: str) -> None:
+    try:
+        logger = node.get_logger()
+    except Exception:
+        return
+    _debug_log(logger, message)
+
+
 def _get_or_declare_parameter(node: Node, name: str, default):
     try:
         if node.has_parameter(name):
             return node.get_parameter(name).value
-    except Exception:
-        pass
+    except Exception as exc:
+        _node_debug(node, f'Parameter check failed for {name}: {exc}')
 
     try:
         return node.declare_parameter(name, default).value
-    except Exception:
-        return node.get_parameter(name).value
+    except Exception as exc:
+        _node_debug(node, f'Parameter declaration failed for {name}: {exc}')
+        try:
+            return node.get_parameter(name).value
+        except Exception as get_exc:
+            _node_debug(node, f'Parameter fallback get failed for {name}: {get_exc}')
+            return default
 
 
-def _get_blackboard_value(blackboard, key: str, default=None):
+def _get_blackboard_value(blackboard, key: str, default=None, logger=None):
     try:
         return blackboard.get(key)
-    except Exception:
+    except KeyError:
+        return default
+    except Exception as exc:
+        _debug_log(logger, f'Blackboard get failed for {key}: {exc}')
         return default
 
 
-def _current_waypoint_or_none(blackboard) -> dict | None:
-    waypoint = _get_blackboard_value(blackboard, '/current_waypoint')
+def _current_waypoint_or_none(blackboard, logger=None) -> dict | None:
+    waypoint = _get_blackboard_value(blackboard, '/current_waypoint', logger=logger)
     return waypoint if isinstance(waypoint, dict) else None
 
 
@@ -64,6 +90,20 @@ def _abandon_future(client, future) -> None:
             cancel()
         except Exception:
             pass
+
+
+def _future_is_pending(future) -> bool:
+    if future is None:
+        return False
+
+    done = getattr(future, 'done', None)
+    if not callable(done):
+        return True
+
+    try:
+        return not done()
+    except Exception:
+        return True
 
 
 class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
@@ -117,35 +157,42 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
         self._service_not_ready_logged = False
 
     def _build_request(self) -> InspectionAlbumUpload.Request | None:
-        wp = _current_waypoint_or_none(self._bb)
+        logger = self._node.get_logger()
+        wp = _current_waypoint_or_none(self._bb, logger=logger)
         if wp is None:
-            self._node.get_logger().warning(
+            logger.warning(
                 'Album upload skipped: current_waypoint is missing or malformed'
             )
             return None
 
-        image_path = str(_get_blackboard_value(self._bb, '/last_capture_path') or '')
+        image_path = str(
+            _get_blackboard_value(self._bb, '/last_capture_path', logger=logger) or ''
+        )
         if not image_path:
-            self._node.get_logger().warning('Album upload skipped: last_capture_path is empty')
+            logger.warning('Album upload skipped: last_capture_path is empty')
             return None
 
-        file_size_raw = _get_blackboard_value(self._bb, '/last_capture_file_size')
+        file_size_raw = _get_blackboard_value(
+            self._bb,
+            '/last_capture_file_size',
+            logger=logger,
+        )
         if file_size_raw is None:
-            self._node.get_logger().warning(
+            logger.warning(
                 'Album upload skipped: last_capture_file_size is missing'
             )
             return None
         try:
             file_size = int(file_size_raw)
         except (TypeError, ValueError):
-            self._node.get_logger().warning(
+            logger.warning(
                 'Album upload skipped: last_capture_file_size is not an integer'
             )
             return None
 
-        capture_url = _get_blackboard_value(self._bb, '/last_capture_url')
+        capture_url = _get_blackboard_value(self._bb, '/last_capture_url', logger=logger)
         if capture_url is None:
-            self._node.get_logger().warning('Album upload skipped: last_capture_url is missing')
+            logger.warning('Album upload skipped: last_capture_url is missing')
             return None
 
         req = InspectionAlbumUpload.Request()
@@ -171,6 +218,27 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
         self._node.get_logger().warning(reason)
         return py_trees.common.Status.FAILURE
 
+    def _interrupt_pending_future(self, reason: str) -> None:
+        if not _future_is_pending(self._future):
+            self._future = None
+            return
+
+        self._audit.publish(
+            service=self._service_name,
+            role='client',
+            phase='response',
+            success=False,
+            duration_ms=_duration_ms(self._req_time),
+            details={'error': reason},
+        )
+        _abandon_future(self._client, self._future)
+        self._future = None
+        self._node.get_logger().warning(reason)
+
+    def terminate(self, new_status: py_trees.common.Status) -> None:
+        if new_status == py_trees.common.Status.INVALID:
+            self._interrupt_pending_future('Album upload interrupted')
+
     def update(self) -> py_trees.common.Status:
         if self._future is not None:
             if not self._future.done():
@@ -182,6 +250,7 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
             try:
                 result = self._future.result()
             except Exception as exc:
+                self._future = None
                 self._audit.publish(
                     service=self._service_name,
                     role='client',
@@ -201,6 +270,7 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
                 success=bool(result.ok),
                 duration_ms=duration,
             )
+            self._future = None
             if bool(result.ok):
                 self._node.get_logger().info(
                     f'Album upload succeeded: trace_id={result.trace_id}'
@@ -286,9 +356,10 @@ class RunModelTask(py_trees.behaviour.Behaviour):
         self._service_not_ready_logged = False
 
     def _build_request(self) -> ModelTaskRun.Request | None:
-        wp = _current_waypoint_or_none(self._bb)
+        logger = self._node.get_logger()
+        wp = _current_waypoint_or_none(self._bb, logger=logger)
         if wp is None:
-            self._node.get_logger().warning(
+            logger.warning(
                 'Model task skipped: current_waypoint is missing or malformed'
             )
             return None
@@ -328,6 +399,27 @@ class RunModelTask(py_trees.behaviour.Behaviour):
         self._node.get_logger().warning(reason)
         return py_trees.common.Status.FAILURE
 
+    def _interrupt_pending_future(self, reason: str) -> None:
+        if not _future_is_pending(self._future):
+            self._future = None
+            return
+
+        self._audit.publish(
+            service=self._service_name,
+            role='client',
+            phase='response',
+            success=False,
+            duration_ms=_duration_ms(self._req_time),
+            details={'error': reason},
+        )
+        _abandon_future(self._client, self._future)
+        self._future = None
+        self._node.get_logger().warning(reason)
+
+    def terminate(self, new_status: py_trees.common.Status) -> None:
+        if new_status == py_trees.common.Status.INVALID:
+            self._interrupt_pending_future('Model task interrupted')
+
     def update(self) -> py_trees.common.Status:
         if self._future is not None:
             if not self._future.done():
@@ -339,6 +431,7 @@ class RunModelTask(py_trees.behaviour.Behaviour):
             try:
                 result = self._future.result()
             except Exception as exc:
+                self._future = None
                 self._audit.publish(
                     service=self._service_name,
                     role='client',
@@ -358,6 +451,7 @@ class RunModelTask(py_trees.behaviour.Behaviour):
                 success=bool(result.ok),
                 duration_ms=duration,
             )
+            self._future = None
             if bool(result.ok):
                 self._bb.set('/last_model_result_json_path', str(result.result_json_path))
                 self._node.get_logger().info(
