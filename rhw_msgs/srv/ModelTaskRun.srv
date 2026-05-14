@@ -1,0 +1,26 @@
+# Request
+string request_id
+string task_name
+float32 conf
+float32 iou
+int32 max_det
+float32 wait_for_frame_timeout_sec
+float32 max_frame_age_sec
+string params_json
+---
+# Response
+bool ok
+string code
+string message
+string request_id
+string task_name
+string task_type
+string model_path
+string backend
+string frame_path
+string result_json_path
+int32 item_count
+int32 error_count
+float32 latency_ms
+string error_category
+string detail_json

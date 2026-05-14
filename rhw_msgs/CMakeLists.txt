@@ -53,6 +53,8 @@ set(srv_files
   "srv/PtzAbsoluteMove.srv"
   "srv/PtzGetPosition.srv"
   "srv/CaptureImage.srv"
+  "srv/InspectionAlbumUpload.srv"
+  "srv/ModelTaskRun.srv"
   "srv/AddWaypoint.srv"
   "srv/DeleteWaypoint.srv"
   "srv/GetWaypoints.srv"
