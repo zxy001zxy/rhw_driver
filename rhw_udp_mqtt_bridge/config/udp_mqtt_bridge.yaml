@@ -43,3 +43,22 @@ mqtt_forwarder_node:
     retain: false
     debug_log_payload: false
     missing_state_log_period_sec: 5.0
+
+inspection_reporter_node:
+  ros__parameters:
+    enabled: true
+    album_report_topic: "/inspection/album_reports"
+    album_upload_service: "/inspection/album_report/upload"
+    device_id: "DOG001"
+    album_report_url: ""
+    partner_id: ""
+    version: "1.0"
+    encryption_enabled: true
+    signature_enabled: true
+    aes_key: ""
+    aes_iv: ""
+    signature_secret: ""
+    timeout_sec: 5.0
+    retry_count: 2
+    verify_tls: true
+    debug_log_payload: false
