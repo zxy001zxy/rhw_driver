@@ -31,9 +31,16 @@ def _get_or_declare_parameter(node: Node, name: str, default):
         return node.get_parameter(name).value
 
 
-def _current_waypoint_or_empty(blackboard) -> dict:
-    waypoint = blackboard.get('/current_waypoint') or {}
-    return waypoint if isinstance(waypoint, dict) else {}
+def _get_blackboard_value(blackboard, key: str, default=None):
+    try:
+        return blackboard.get(key)
+    except Exception:
+        return default
+
+
+def _current_waypoint_or_none(blackboard) -> dict | None:
+    waypoint = _get_blackboard_value(blackboard, '/current_waypoint')
+    return waypoint if isinstance(waypoint, dict) else None
 
 
 def _duration_ms(req_time: float | None) -> float | None:
@@ -110,18 +117,35 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
         self._service_not_ready_logged = False
 
     def _build_request(self) -> InspectionAlbumUpload.Request | None:
-        wp = _current_waypoint_or_empty(self._bb)
-        image_path = str(self._bb.get('/last_capture_path') or '')
+        wp = _current_waypoint_or_none(self._bb)
+        if wp is None:
+            self._node.get_logger().warning(
+                'Album upload skipped: current_waypoint is missing or malformed'
+            )
+            return None
+
+        image_path = str(_get_blackboard_value(self._bb, '/last_capture_path') or '')
         if not image_path:
             self._node.get_logger().warning('Album upload skipped: last_capture_path is empty')
             return None
 
+        file_size_raw = _get_blackboard_value(self._bb, '/last_capture_file_size')
+        if file_size_raw is None:
+            self._node.get_logger().warning(
+                'Album upload skipped: last_capture_file_size is missing'
+            )
+            return None
         try:
-            file_size = int(self._bb.get('/last_capture_file_size') or 0)
+            file_size = int(file_size_raw)
         except (TypeError, ValueError):
             self._node.get_logger().warning(
                 'Album upload skipped: last_capture_file_size is not an integer'
             )
+            return None
+
+        capture_url = _get_blackboard_value(self._bb, '/last_capture_url')
+        if capture_url is None:
+            self._node.get_logger().warning('Album upload skipped: last_capture_url is missing')
             return None
 
         req = InspectionAlbumUpload.Request()
@@ -129,7 +153,7 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
         req.point_id = str(wp.get('waypoint_id', ''))
         req.point_name = str(wp.get('label') or req.point_id)
         req.image_path = image_path
-        req.capture_url = str(self._bb.get('/last_capture_url') or '')
+        req.capture_url = str(capture_url or '')
         req.file_size = max(0, min(file_size, UINT32_MAX))
         return req
 
@@ -262,7 +286,12 @@ class RunModelTask(py_trees.behaviour.Behaviour):
         self._service_not_ready_logged = False
 
     def _build_request(self) -> ModelTaskRun.Request | None:
-        wp = _current_waypoint_or_empty(self._bb)
+        wp = _current_waypoint_or_none(self._bb)
+        if wp is None:
+            self._node.get_logger().warning(
+                'Model task skipped: current_waypoint is missing or malformed'
+            )
+            return None
         params = parse_task_params(wp)
         task_name = str(params.get('inference_type', '')).strip()
         if not task_name:
