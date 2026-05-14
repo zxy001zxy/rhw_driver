@@ -11,6 +11,54 @@ from rhw_task_scheduler.bt_utils import parse_task_params
 from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
 
+INSPECTION_ALBUM_UPLOAD_SERVICE = '/inspection/album_report/upload'
+ALBUM_UPLOAD_TIMEOUT_SEC = 30.0
+MODEL_TASK_RUN_SERVICE = '/rhw/model/task/run'
+MODEL_TASK_TIMEOUT_SEC = 60.0
+UINT32_MAX = 4294967295
+
+
+def _get_or_declare_parameter(node: Node, name: str, default):
+    try:
+        if node.has_parameter(name):
+            return node.get_parameter(name).value
+    except Exception:
+        pass
+
+    try:
+        return node.declare_parameter(name, default).value
+    except Exception:
+        return node.get_parameter(name).value
+
+
+def _current_waypoint_or_empty(blackboard) -> dict:
+    waypoint = blackboard.get('/current_waypoint') or {}
+    return waypoint if isinstance(waypoint, dict) else {}
+
+
+def _duration_ms(req_time: float | None) -> float | None:
+    return (time.time() - req_time) * 1000 if req_time else None
+
+
+def _abandon_future(client, future) -> None:
+    if future is None:
+        return
+
+    remove_pending_request = getattr(client, 'remove_pending_request', None)
+    if callable(remove_pending_request):
+        try:
+            remove_pending_request(future)
+        except Exception:
+            pass
+
+    cancel = getattr(future, 'cancel', None)
+    if callable(cancel):
+        try:
+            cancel()
+        except Exception:
+            pass
+
+
 class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
     """调用 /inspection/album_report/upload，同步判定图片上报结果。"""
 
@@ -29,27 +77,51 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
             self._audit = ServiceAuditPublisher(self._node)
 
         self._service_name = str(
-            self._node.get_parameter('inspection_album_upload_service').value
+            _get_or_declare_parameter(
+                self._node,
+                'inspection_album_upload_service',
+                INSPECTION_ALBUM_UPLOAD_SERVICE,
+            )
         )
         self._timeout_sec = max(
-            float(self._node.get_parameter('album_upload_timeout_sec').value),
+            float(
+                _get_or_declare_parameter(
+                    self._node,
+                    'album_upload_timeout_sec',
+                    ALBUM_UPLOAD_TIMEOUT_SEC,
+                )
+            ),
             0.1,
         )
-        self._client = self._node.create_client(InspectionAlbumUpload, self._service_name)
+        self._client = self._node.create_client(
+            InspectionAlbumUpload,
+            self._service_name,
+            callback_group=getattr(self._node, '_callback_group', None),
+        )
         self._future = None
         self._req_time: float | None = None
         self._deadline: float | None = None
+        self._service_not_ready_logged = False
 
     def initialise(self) -> None:
         self._future = None
         self._req_time = None
         self._deadline = time.monotonic() + self._timeout_sec
+        self._service_not_ready_logged = False
 
     def _build_request(self) -> InspectionAlbumUpload.Request | None:
-        wp = self._bb.get('/current_waypoint') or {}
+        wp = _current_waypoint_or_empty(self._bb)
         image_path = str(self._bb.get('/last_capture_path') or '')
         if not image_path:
             self._node.get_logger().warning('Album upload skipped: last_capture_path is empty')
+            return None
+
+        try:
+            file_size = int(self._bb.get('/last_capture_file_size') or 0)
+        except (TypeError, ValueError):
+            self._node.get_logger().warning(
+                'Album upload skipped: last_capture_file_size is not an integer'
+            )
             return None
 
         req = InspectionAlbumUpload.Request()
@@ -58,18 +130,31 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
         req.point_name = str(wp.get('label') or req.point_id)
         req.image_path = image_path
         req.capture_url = str(self._bb.get('/last_capture_url') or '')
-        req.file_size = max(0, min(int(self._bb.get('/last_capture_file_size') or 0), 4294967295))
+        req.file_size = max(0, min(file_size, UINT32_MAX))
         return req
+
+    def _timeout_failure(self, reason: str) -> py_trees.common.Status:
+        self._audit.publish(
+            service=self._service_name,
+            role='client',
+            phase='response',
+            success=False,
+            duration_ms=_duration_ms(self._req_time),
+            details={'error': reason},
+        )
+        _abandon_future(self._client, self._future)
+        self._future = None
+        self._node.get_logger().warning(reason)
+        return py_trees.common.Status.FAILURE
 
     def update(self) -> py_trees.common.Status:
         if self._future is not None:
             if not self._future.done():
                 if self._deadline is not None and time.monotonic() > self._deadline:
-                    self._node.get_logger().warning('Album upload service timeout')
-                    return py_trees.common.Status.FAILURE
+                    return self._timeout_failure('Album upload service timeout')
                 return py_trees.common.Status.RUNNING
 
-            duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+            duration = _duration_ms(self._req_time)
             try:
                 result = self._future.result()
             except Exception as exc:
@@ -106,7 +191,9 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
             if self._deadline is not None and time.monotonic() > self._deadline:
                 self._node.get_logger().warning('Album upload service not ready before timeout')
                 return py_trees.common.Status.FAILURE
-            self._node.get_logger().warning('Album upload service not ready')
+            if not self._service_not_ready_logged:
+                self._node.get_logger().warning('Album upload service not ready')
+                self._service_not_ready_logged = True
             return py_trees.common.Status.RUNNING
 
         req = self._build_request()
@@ -142,23 +229,41 @@ class RunModelTask(py_trees.behaviour.Behaviour):
         else:
             self._audit = ServiceAuditPublisher(self._node)
 
-        self._service_name = str(self._node.get_parameter('model_task_run_service').value)
+        self._service_name = str(
+            _get_or_declare_parameter(
+                self._node,
+                'model_task_run_service',
+                MODEL_TASK_RUN_SERVICE,
+            )
+        )
         self._timeout_sec = max(
-            float(self._node.get_parameter('model_task_timeout_sec').value),
+            float(
+                _get_or_declare_parameter(
+                    self._node,
+                    'model_task_timeout_sec',
+                    MODEL_TASK_TIMEOUT_SEC,
+                )
+            ),
             0.1,
         )
-        self._client = self._node.create_client(ModelTaskRun, self._service_name)
+        self._client = self._node.create_client(
+            ModelTaskRun,
+            self._service_name,
+            callback_group=getattr(self._node, '_callback_group', None),
+        )
         self._future = None
         self._req_time: float | None = None
         self._deadline: float | None = None
+        self._service_not_ready_logged = False
 
     def initialise(self) -> None:
         self._future = None
         self._req_time = None
         self._deadline = time.monotonic() + self._timeout_sec
+        self._service_not_ready_logged = False
 
     def _build_request(self) -> ModelTaskRun.Request | None:
-        wp = self._bb.get('/current_waypoint') or {}
+        wp = _current_waypoint_or_empty(self._bb)
         params = parse_task_params(wp)
         task_name = str(params.get('inference_type', '')).strip()
         if not task_name:
@@ -181,15 +286,28 @@ class RunModelTask(py_trees.behaviour.Behaviour):
         req.params_json = ''
         return req
 
+    def _timeout_failure(self, reason: str) -> py_trees.common.Status:
+        self._audit.publish(
+            service=self._service_name,
+            role='client',
+            phase='response',
+            success=False,
+            duration_ms=_duration_ms(self._req_time),
+            details={'error': reason},
+        )
+        _abandon_future(self._client, self._future)
+        self._future = None
+        self._node.get_logger().warning(reason)
+        return py_trees.common.Status.FAILURE
+
     def update(self) -> py_trees.common.Status:
         if self._future is not None:
             if not self._future.done():
                 if self._deadline is not None and time.monotonic() > self._deadline:
-                    self._node.get_logger().warning('Model task service timeout')
-                    return py_trees.common.Status.FAILURE
+                    return self._timeout_failure('Model task service timeout')
                 return py_trees.common.Status.RUNNING
 
-            duration = (time.time() - self._req_time) * 1000 if self._req_time else None
+            duration = _duration_ms(self._req_time)
             try:
                 result = self._future.result()
             except Exception as exc:
@@ -229,7 +347,9 @@ class RunModelTask(py_trees.behaviour.Behaviour):
             if self._deadline is not None and time.monotonic() > self._deadline:
                 self._node.get_logger().warning('Model task service not ready before timeout')
                 return py_trees.common.Status.FAILURE
-            self._node.get_logger().warning('Model task service not ready')
+            if not self._service_not_ready_logged:
+                self._node.get_logger().warning('Model task service not ready')
+                self._service_not_ready_logged = True
             return py_trees.common.Status.RUNNING
 
         req = self._build_request()
