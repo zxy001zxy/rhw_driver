@@ -189,8 +189,7 @@ class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
 
         if not self._client.service_is_ready():
             if self._deadline is not None and time.monotonic() > self._deadline:
-                self._node.get_logger().warning('Album upload service not ready before timeout')
-                return py_trees.common.Status.FAILURE
+                return self._timeout_failure('Album upload service not ready before timeout')
             if not self._service_not_ready_logged:
                 self._node.get_logger().warning('Album upload service not ready')
                 self._service_not_ready_logged = True
@@ -345,8 +344,7 @@ class RunModelTask(py_trees.behaviour.Behaviour):
 
         if not self._client.service_is_ready():
             if self._deadline is not None and time.monotonic() > self._deadline:
-                self._node.get_logger().warning('Model task service not ready before timeout')
-                return py_trees.common.Status.FAILURE
+                return self._timeout_failure('Model task service not ready before timeout')
             if not self._service_not_ready_logged:
                 self._node.get_logger().warning('Model task service not ready')
                 self._service_not_ready_logged = True
