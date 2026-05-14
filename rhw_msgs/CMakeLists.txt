@@ -29,6 +29,7 @@ set(msg_files
   "msg/PtzStatus.msg"
   "msg/WaypointTask.msg"
   "msg/MissionStatus.msg"
+  "msg/InspectionAlbumReport.msg"
   # "msg/DynamicParams.msg"
   # "msg/Gps.msg"
 )

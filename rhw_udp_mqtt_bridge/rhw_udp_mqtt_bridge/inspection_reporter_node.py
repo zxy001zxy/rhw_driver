@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import random
@@ -13,10 +14,16 @@ import rclpy
 import requests
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
 from rhw_msgs.msg import InspectionAlbumReport
 from rhw_msgs.srv import InspectionAlbumUpload
+
+
+class _AlbumReporterConfigError(ValueError):
+    """Raised when album reporter cryptographic/signature config is invalid."""
 
 
 class InspectionReporterNode(Node):
@@ -27,17 +34,20 @@ class InspectionReporterNode(Node):
 
         self._declare_parameters()
         self._read_parameters()
+        self._callback_group = ReentrantCallbackGroup()
 
         self.create_subscription(
             InspectionAlbumReport,
             self._album_report_topic,
             self._on_album_report,
             10,
+            callback_group=self._callback_group,
         )
         self.create_service(
             InspectionAlbumUpload,
             self._album_upload_service,
             self._handle_album_upload,
+            callback_group=self._callback_group,
         )
 
         self.get_logger().info(
@@ -128,6 +138,15 @@ class InspectionReporterNode(Node):
 
         try:
             payload = self._build_album_payload(msg)
+        except _AlbumReporterConfigError as exc:
+            return {
+                'ok': False,
+                'code': 'CONFIG_ERROR',
+                'message': str(exc),
+                'trace_id': '',
+                'http_status': 0,
+                'response_body': '',
+            }
         except Exception as exc:
             return {
                 'ok': False,
@@ -188,9 +207,9 @@ class InspectionReporterNode(Node):
         key = self._decode_secret(self._aes_key, label='aes_key')
         iv = self._decode_secret(self._aes_iv, label='aes_iv')
         if len(key) not in (16, 24, 32):
-            raise ValueError('aes_key must be 16, 24 or 32 bytes')
+            raise _AlbumReporterConfigError('aes_key must be 16, 24 or 32 bytes')
         if len(iv) != 16:
-            raise ValueError('aes_iv must be 16 bytes')
+            raise _AlbumReporterConfigError('aes_iv must be 16 bytes')
 
         padder = padding.PKCS7(algorithms.AES.block_size).padder()
         padded = padder.update(data_text.encode('utf-8')) + padder.finalize()
@@ -202,7 +221,9 @@ class InspectionReporterNode(Node):
         if not self._signature_enabled:
             return ''
         if not self._signature_secret:
-            raise ValueError('signature_secret is required when signature_enabled=true')
+            raise _AlbumReporterConfigError(
+                'signature_secret is required when signature_enabled=true'
+            )
         source = f'{trace_id}{data_field}{self._signature_secret}'
         return hashlib.md5(source.encode('utf-8')).hexdigest()
 
@@ -295,25 +316,36 @@ class InspectionReporterNode(Node):
         try:
             body = response.json()
         except ValueError:
-            return True, f'http_status={response.status_code} body={text}'
+            return False, f'http_status={response.status_code} non_json_body={text}'
 
-        if isinstance(body, dict) and 'code' in body:
-            try:
-                code = int(body.get('code', -1))
-            except (TypeError, ValueError):
-                code = -1
-            return code == 0, f'http_status={response.status_code} body={body}'
-        return True, f'http_status={response.status_code} body={body}'
+        if not isinstance(body, dict):
+            return False, f'http_status={response.status_code} body={body}'
+        if 'code' not in body:
+            return False, f'http_status={response.status_code} missing_code body={body}'
+
+        try:
+            code = int(body.get('code', -1))
+        except (TypeError, ValueError):
+            return False, f'http_status={response.status_code} invalid_code body={body}'
+        return code == 0, f'http_status={response.status_code} body={body}'
 
     @staticmethod
     def _decode_secret(value: str, *, label: str) -> bytes:
         if not value:
-            raise ValueError(f'{label} is required')
+            raise _AlbumReporterConfigError(f'{label} is required')
 
         if value.startswith('base64:'):
-            return base64.b64decode(value[len('base64:'):])
+            try:
+                return base64.b64decode(value[len('base64:'):], validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise _AlbumReporterConfigError(
+                    f'{label} must be valid base64'
+                ) from exc
         if value.startswith('hex:'):
-            return bytes.fromhex(value[len('hex:'):])
+            try:
+                return bytes.fromhex(value[len('hex:'):])
+            except ValueError as exc:
+                raise _AlbumReporterConfigError(f'{label} must be valid hex') from exc
         return value.encode('utf-8')
 
     @staticmethod
@@ -324,11 +356,14 @@ class InspectionReporterNode(Node):
 def main() -> None:
     rclpy.init()
     node = InspectionReporterNode()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
