@@ -83,13 +83,7 @@ ros2 launch rhw_udp_mqtt_bridge udp_bridge.launch.py enable_mqtt_forwarder:=true
 ros2 run rhw_udp_mqtt_bridge mqtt_forwarder_node
 ```
 
-如果需要启用巡检抓拍 HTTPS 上报：
-
-```bash
-ros2 launch rhw_udp_mqtt_bridge udp_bridge.launch.py enable_inspection_reporter:=true
-```
-
-或单独启动：
+巡检抓拍 HTTPS 上报节点单独启动：
 
 ```bash
 ros2 run rhw_udp_mqtt_bridge inspection_reporter_node
@@ -184,7 +178,8 @@ rhw_udp_mqtt_bridge/
 └── rhw_udp_mqtt_bridge/
     ├── __init__.py
     ├── udp_bridge_node.py
-    └── mqtt_forwarder_node.py
+    ├── mqtt_forwarder_node.py
+    └── inspection_reporter_node.py
 ```
 
 ## 后续建议

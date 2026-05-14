@@ -379,10 +379,12 @@ rhw_task_scheduler/
 ├── README.md
 ├── config/task_scheduler.yaml
 ├── launch/task_scheduler.launch.py
+├── launch/mission_test.launch.py
 ├── setup.py
 └── rhw_task_scheduler/
     ├── waypoint_manager.py
     ├── mission_bt_node.py
+    ├── mission_test_mocks.py
     ├── bt_utils.py
     ├── service_audit.py
     ├── bt_web_viewer.py
@@ -390,6 +392,7 @@ rhw_task_scheduler/
         ├── condition_nodes.py
         ├── navigate_action.py
         ├── ptz_actions.py
+        ├── vision_actions.py
         └── charge_action.py
 ```
 
