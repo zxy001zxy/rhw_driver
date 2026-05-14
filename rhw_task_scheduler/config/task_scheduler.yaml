@@ -67,3 +67,7 @@ mission_bt_node:
 
     # ---------- 话题 ----------
     mission_status_topic: "/mission/status"
+    inspection_album_upload_service: "/inspection/album_report/upload"
+    album_upload_timeout_sec: 30.0
+    model_task_run_service: "/rhw/model/task/run"
+    model_task_timeout_sec: 60.0

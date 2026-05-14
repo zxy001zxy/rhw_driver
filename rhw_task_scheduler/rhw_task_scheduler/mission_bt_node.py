@@ -54,6 +54,10 @@ from rhw_task_scheduler.bt_actions.condition_nodes import (
 )
 from rhw_task_scheduler.bt_actions.navigate_action import NavigateToGoal
 from rhw_task_scheduler.bt_actions.ptz_actions import CaptureImage, PtzAbsoluteMove, WaitPtzStable
+from rhw_task_scheduler.bt_actions.vision_actions import (
+    RunModelTask,
+    UploadInspectionAlbum,
+)
 from rhw_task_scheduler.bt_utils import safe_slug
 from rhw_task_scheduler.service_audit import ServiceAuditPublisher
 
@@ -192,6 +196,10 @@ class MissionBtNode(Node):
         self.declare_parameter('mqtt_mission_start_topic', 'rhw/mission/start')
         self.declare_parameter('mqtt_mission_status_topic', 'rhw/mission/status')
         self.declare_parameter('mission_status_topic', '/mission/status')
+        self.declare_parameter('inspection_album_upload_service', '/inspection/album_report/upload')
+        self.declare_parameter('album_upload_timeout_sec', 30.0)
+        self.declare_parameter('model_task_run_service', '/rhw/model/task/run')
+        self.declare_parameter('model_task_timeout_sec', 60.0)
         self.declare_parameter('get_waypoints_service', '/waypoint_manager/get_waypoints')
         self.declare_parameter('debug_print_tree_on_build', True)
         self.declare_parameter('debug_print_tree_on_tick', False)
@@ -573,6 +581,8 @@ class MissionBtNode(Node):
         vision_seq.add_child(PtzAbsoluteMove('PtzAbsoluteMove', node=self))
         vision_seq.add_child(WaitPtzStable('WaitPtzStable', node=self))
         vision_seq.add_child(CaptureImage('CaptureImage', node=self))
+        vision_seq.add_child(UploadInspectionAlbum('UploadInspectionAlbum', node=self))
+        vision_seq.add_child(RunModelTask('RunModelTask', node=self))
         task_selector.add_child(vision_seq)
 
         # 3b) 充电任务
