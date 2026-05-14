@@ -14,9 +14,9 @@
 
 - `TYPE_NORMAL=0`：普通导航点，到达即完成
 - `TYPE_CHARGE=1`：充电点，到达后调用 `/recharge`
-- `TYPE_VISION=2`：视觉点，到达后执行 PTZ 绝对位置移动、等待稳定、抓拍
+- `TYPE_VISION=2`：视觉点，导航到位后执行 PTZ 绝对位置移动、等待稳定、抓拍、同步相册上传和模型任务
 
-当前只包含真实运行链路，不包含测试用例、模拟节点或内部模拟分支。测试能力后续应以独立测试目录或独立测试包补充。
+包含独立测试启动文件和 mock 节点，可按需混用真实点位、真实导航、真实云台或模拟接口。
 
 ## 行为树流程
 
@@ -29,9 +29,13 @@ Sequence (WaypointHandler)
 └── Selector (TaskSelector)
     ├── Sequence (VisionTask)
     │   ├── IsVisionPoint
+    │   ├── WaitAfterNavArrived
     │   ├── PtzAbsoluteMove
     │   ├── WaitPtzStable
-    │   └── CaptureImage
+    │   ├── WaitAfterPtzArrived
+    │   ├── CaptureImage
+    │   ├── UploadInspectionAlbum
+    │   └── RunModelTask
     ├── Sequence (ChargeTask)
     │   ├── IsChargePoint
     │   └── Recharge
@@ -42,9 +46,34 @@ Sequence (WaypointHandler)
 
 - `CheckBattery`：订阅 `/robot/battery_status`，低于阈值时当前航点失败
 - `NavigateToGoal`：调用 `/move_base_simple/goal`，监听 `/navigation_status`
-- `VisionTask`：调用 `/ptz/absolute_move`，监听 `/ptz/status`，再调用 `/ptz/capture_image`
+- `VisionTask`：调用 `/ptz/absolute_move`，监听 `/ptz/status`，再依次执行 `/ptz/capture_image`、`/inspection/album_report/upload` 同步相册上报和 `/rhw/model/task/run` 模型任务
 - `ChargeTask`：调用 `/recharge`
 - `IsNormalPoint`：普通导航点到达后直接成功
+
+`TYPE_VISION=2` 视觉点完整流程：
+
+```text
+NavigateToGoal
+-> WaitAfterNavArrived
+-> PtzAbsoluteMove
+-> WaitPtzStable
+-> WaitAfterPtzArrived
+-> CaptureImage
+-> UploadInspectionAlbum
+-> RunModelTask
+```
+
+`task_params.inference_type` 需要填写模型调度服务的完整 `task_name`，例如：
+
+```json
+{
+  "azimuth": 180.0,
+  "elevation": 0.0,
+  "zoom": 6.5,
+  "channel": 1,
+  "inference_type": "fire_equipment_detection"
+}
+```
 
 ## 依赖安装
 
@@ -77,6 +106,8 @@ pip3 install -U py_trees paho-mqtt
 | `/ptz/absolute_move` | Service | 云台绝对位置移动，支持可选 `zoom` |
 | `/ptz/status` | Topic | 云台状态 |
 | `/ptz/capture_image` | Service | 抓拍 |
+| `/inspection/album_report/upload` | Service | 抓拍后同步 HTTPS 相册上报 |
+| `/rhw/model/task/run` | Service | 相册上报成功后执行模型任务 |
 | `/recharge` | Service | 回充 |
 | `/robot/battery_status` | Topic | 电池状态 |
 | `/mission/status` | Topic | 任务状态 |
@@ -137,10 +168,22 @@ ros2 launch rhw_ptz_controller ptz_controller.launch.py
 ros2 launch rhw_task_scheduler mission_test.launch.py
 ```
 
+全 mock 测试视觉点完整流程：
+
+```bash
+ros2 launch rhw_task_scheduler mission_test.launch.py \
+  use_real_waypoints:=false \
+  use_real_navigation:=false \
+  use_real_ptz:=false \
+  use_real_album_upload:=false \
+  use_real_model_task:=false \
+  bt_viewer:=true
+```
+
 默认会提供这些测试航点：
 
 - `normal_001`：普通导航点
-- `vision_001`：视觉点，走 PTZ 绝对位置移动 + 抓拍
+- `vision_001`：视觉点，走 PTZ 绝对位置移动 + 抓拍 + 相册上传 + 模型任务
 - `charge_001`：充电点
 
 然后在 `rqt` 或命令行里调用：
@@ -158,18 +201,23 @@ ros2 service call /mission/start rhw_msgs/srv/StartMission "{
 ros2 launch rhw_task_scheduler mission_test.launch.py use_real_ptz:=false
 ```
 
-如果你已经有真实点位，但暂时没有真实导航，可以保留真实点位管理，只模拟导航：
+如果你已经有真实点位，但暂时没有真实导航，可以保留真实点位管理，只使用真实云台，上传和模型仍使用 mock：
 
 ```bash
 ros2 launch rhw_task_scheduler mission_test.launch.py \
   use_real_waypoints:=true \
   use_real_navigation:=false \
-  use_real_ptz:=true
+  use_real_ptz:=true \
+  use_real_album_upload:=false \
+  use_real_model_task:=false \
+  bt_viewer:=true
 ```
 
 这时 `/mission/start` 里的 `map_name` 和 `waypoint_ids` 必须使用真实 `waypoint_manager` 中已经存在的数据。如果你已经单独启动了 `waypoint_manager`，可以额外加 `launch_waypoint_manager:=false`，避免重复启动。
 
 需要自定义航点时，可以通过 `waypoints_json` 传入 JSON 覆盖默认数据。
+
+`use_real_album_upload:=true` 会让行为树调用真实 `/inspection/album_report/upload`，`use_real_model_task:=true` 会调用真实 `/rhw/model/task/run`；保持为 `false` 时由 `mission_test_mocks` 提供 `/test/...` 服务。`album_upload_result:=false` 或 `model_task_result:=false` 可让对应 mock 返回失败，用于验证视觉点失败分支。
 
 ## 配置
 
@@ -205,6 +253,10 @@ ros2 launch rhw_task_scheduler mission_test.launch.py \
 | `ptz_absolute_move_service` | `/ptz/absolute_move` | 云台绝对位置移动服务 |
 | `ptz_capture_service` | `/ptz/capture_image` | 抓拍服务 |
 | `ptz_status_topic` | `/ptz/status` | 云台状态话题 |
+| `inspection_album_upload_service` | `/inspection/album_report/upload` | 抓拍后同步相册上传服务 |
+| `album_upload_timeout_sec` | `30.0` | 相册上传服务调用超时 |
+| `model_task_run_service` | `/rhw/model/task/run` | 模型调度任务服务 |
+| `model_task_timeout_sec` | `60.0` | 模型任务服务调用超时 |
 | `ptz_stable_timeout_sec` | `5.0` | 等待云台稳定超时 |
 | `default_ptz_channel` | `1` | 默认云台通道 |
 | `recharge_service` | `/recharge` | 回充服务 |
@@ -237,16 +289,17 @@ ros2 service call /waypoint_manager/add_waypoint rhw_msgs/srv/AddWaypoint "{
     pose: {x: 1.2, y: 3.4, theta: 0.0},
     waypoint_type: 2,
     label: '视觉检测点1',
-    task_params: '{\"azimuth\":180.0,\"elevation\":0.0,\"zoom\":6.5,\"channel\":1,\"azimuth_speed\":50,\"elevation_speed\":50}'
+    task_params: '{\"azimuth\":180.0,\"elevation\":0.0,\"zoom\":6.5,\"channel\":1,\"azimuth_speed\":50,\"elevation_speed\":50,\"inference_type\":\"fire_equipment_detection\"}'
   }
 }"
 ```
 
 视觉点位 `task_params`：
 
-- 必填：`azimuth`、`elevation`
+- 必填：`azimuth`、`elevation`、`inference_type`
 - 可选：`zoom`、`channel`、`azimuth_speed`、`elevation_speed`
 - `zoom` 对应设备 ISAPI 的 `absoluteZoom` 原始值；不填或填 `0` 表示不调整倍率
+- `inference_type` 必须是模型调度服务的 `task_name`，例如 `fire_equipment_detection`
 
 普通导航点和充电点可将 `task_params` 留空。
 
@@ -342,7 +395,6 @@ rhw_task_scheduler/
 
 ## 当前限制
 
-- 当前视觉点执行到抓拍为止，尚未接入真实推理服务。
 - 当前任务执行采用“单航点单行为树”方式串行推进。
 - 当前未实现任务结果持久化，如需任务审计或报表，可补充数据库或 JSON 日志。
 - 当前未实现部署阶段的 MQTT 点位管理请求接口；点位同步为主动上报模式。
