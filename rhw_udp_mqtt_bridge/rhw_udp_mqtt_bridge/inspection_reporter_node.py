@@ -67,6 +67,7 @@ class InspectionReporterNode(Node):
         self.declare_parameter('version', '1.0')
         self.declare_parameter('aes_key', '')
         self.declare_parameter('aes_iv', '')
+        self.declare_parameter('signature', '')
         self.declare_parameter('signature_secret', '')
         self.declare_parameter('encryption_enabled', True)
         self.declare_parameter('signature_enabled', True)
@@ -85,6 +86,7 @@ class InspectionReporterNode(Node):
         self._version = str(self.get_parameter('version').value)
         self._aes_key = str(self.get_parameter('aes_key').value)
         self._aes_iv = str(self.get_parameter('aes_iv').value)
+        self._fixed_signature = str(self.get_parameter('signature').value)
         self._signature_secret = str(self.get_parameter('signature_secret').value)
         self._encryption_enabled = bool(self.get_parameter('encryption_enabled').value)
         self._signature_enabled = bool(self.get_parameter('signature_enabled').value)
@@ -186,7 +188,7 @@ class InspectionReporterNode(Node):
             'pointId': str(msg.point_id),
         }
         data_text = json.dumps(data_plain, ensure_ascii=False, separators=(',', ':'))
-        data_field = self._encrypt_data(data_text) if self._encryption_enabled else data_text
+        data_field = self._encrypt_data(data_text) if self._encryption_enabled else data_plain
         trace_id = self._new_trace_id()
 
         return {
@@ -217,14 +219,21 @@ class InspectionReporterNode(Node):
         encrypted = encryptor.update(padded) + encryptor.finalize()
         return base64.b64encode(encrypted).decode('ascii')
 
-    def _signature(self, trace_id: str, data_field: str) -> str:
+    def _signature(self, trace_id: str, data_field: Any) -> str:
         if not self._signature_enabled:
             return ''
+        if self._fixed_signature:
+            return self._fixed_signature
         if not self._signature_secret:
             raise _AlbumReporterConfigError(
                 'signature_secret is required when signature_enabled=true'
             )
-        source = f'{trace_id}{data_field}{self._signature_secret}'
+        data_text = (
+            data_field
+            if isinstance(data_field, str)
+            else json.dumps(data_field, ensure_ascii=False, separators=(',', ':'))
+        )
+        source = f'{trace_id}{data_text}{self._signature_secret}'
         return hashlib.md5(source.encode('utf-8')).hexdigest()
 
     def _post_with_retries(

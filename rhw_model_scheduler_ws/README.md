@@ -36,3 +36,13 @@ ros2 service call /rhw/model/task/run rhw_msgs/srv/ModelTaskRun "{
 除 `request_id` 和 `task_name` 外，任务调度保持模型调用参数为默认值：`conf=0.25`、`iou=0.45`、`max_det=100`、`wait_for_frame_timeout_sec=3.0`、`max_frame_age_sec=2.0`、`params_json=''`。
 
 模型服务返回 `ok=false` 时，行为树会把当前视觉点判定为失败；返回 `ok=true` 时会把 `result_json_path` 写入黑板 `/last_model_result_json_path`，供后续扩展节点使用。
+
+
+当前任务：
+
+| task_name | task_type | 模型 |
+| --- | --- | --- |
+| `fire_equipment_detection` | `det` | `models/current/fire_equipment_detection.pt` |
+| `front_panel_pose` | `kpt` | `models/current/front_panel_pose.pt` |
+| `rust_segmentation` | `seg` | `models/current/rust_segmentation.pt` |
+| `colormeter_gauge` | `gauge` | `models/current/colormeter_gauge.pt` |

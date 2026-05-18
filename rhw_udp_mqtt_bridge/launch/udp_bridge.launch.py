@@ -19,7 +19,7 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             'enable_inspection_reporter',
-            default_value='false',
+            default_value='true',
             description='Whether to launch inspection_reporter_node for HTTPS album reports',
         ),
         Node(

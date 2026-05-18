@@ -4,7 +4,7 @@ udp_bridge_node:
     bind_port: 30000
     robot_host: "10.21.31.103"
     robot_port: 30000
-    receive_filter_host: "10.21.41.1"
+    receive_filter_host: "10.21.31.103"
     receive_filter_port: 30000
     heartbeat_period_sec: 1.0
     basic_status_topic: "/robot/basic_status"
@@ -26,7 +26,7 @@ mqtt_gateway_node:
     enabled: true
     broker_host: "8.130.34.168"
     broker_port: 1883
-    client_id: "robot-inspect-server"
+    client_id: "robot-inspect-client"
     username: "admin"
     password: "public"
     upload_topic: "/robot-dog/DOG001/Upload/Data"
@@ -57,15 +57,16 @@ inspection_reporter_node:
     album_report_topic: "/inspection/album_reports"
     album_upload_service: "/inspection/album_report/upload"
     device_id: "DOG001"
-    album_report_url: ""
-    partner_id: ""
-    version: "1.0"
-    encryption_enabled: true
-    signature_enabled: true
+    album_report_url: "https://api.xunjianxitong.click/robot-inspect/inspect/album/report"
+    partner_id: "1000009"
+    version: "1.0.0"
+    encryption_enabled: false
+    signature_enabled: false
+    signature: ""
     aes_key: ""
     aes_iv: ""
     signature_secret: ""
-    timeout_sec: 5.0
+    timeout_sec: 15.0
     retry_count: 2
-    verify_tls: true
-    debug_log_payload: false
+    verify_tls: false
+    debug_log_payload: true

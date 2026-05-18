@@ -37,7 +37,7 @@ camera_publisher_node:
     jpeg_quality: 70                   # JPEG 压缩质量 1-100
     output_width: 640                 # 输出宽度，0=保持原尺寸
     output_height: 480                # 输出高度，0=保持原尺寸
-    qos_reliability: "best_effort"     # reliable(兼容 rqt 等) / best_effort(低延迟)
+    qos_reliability: "reliable"     # reliable(兼容 rqt 等) / best_effort(低延迟)
     qos_depth: 1                       # 发布队列深度，1=只保留最新帧
 
 thermal_camera_publisher_node:
@@ -59,5 +59,5 @@ thermal_camera_publisher_node:
     jpeg_quality: 70
     output_width: 0                    # 保持热成像原始分辨率
     output_height: 0                   # 保持热成像原始分辨率
-    qos_reliability: "best_effort"
+    qos_reliability: "reliable"
     qos_depth: 1
