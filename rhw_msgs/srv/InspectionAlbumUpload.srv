@@ -1,0 +1,40 @@
+# 服务: /inspection/album_report/upload
+# 同步上传巡检相册/抓拍结果，供行为树判定视觉点成败
+
+# 平台任务 ID；手动测试可由任务调度节点生成
+string task_id
+
+# 抓拍点位 ID
+string point_id
+
+# 抓拍点位名称
+string point_name
+
+# 本地图片文件路径
+string image_path
+
+# 云台/摄像机抓拍接口返回的图片 URL
+string capture_url
+
+# 图片文件大小，单位字节
+uint32 file_size
+
+---
+
+# true 表示 HTTPS 上报已完成且平台响应成功
+bool ok
+
+# 机器可读结果码，例如 OK、DISABLED、CONFIG_ERROR、POST_FAILED
+string code
+
+# 人可读结果说明
+string message
+
+# 外层 HTTPS 请求 traceId
+string trace_id
+
+# HTTP 状态码；未发起 HTTP 请求时为 0
+int32 http_status
+
+# 平台响应正文，最多由上报节点截断到安全长度
+string response_body

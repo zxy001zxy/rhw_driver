@@ -4,7 +4,7 @@ udp_bridge_node:
     bind_port: 30000
     robot_host: "10.21.31.103"
     robot_port: 30000
-    receive_filter_host: "10.21.41.1"
+    receive_filter_host: "10.21.31.103"
     receive_filter_port: 30000
     heartbeat_period_sec: 1.0
     basic_status_topic: "/robot/basic_status"
@@ -21,15 +21,16 @@ udp_bridge_node:
     socket_timeout_sec: 0.5
     debug_log_sender: false
 
-mqtt_forwarder_node:
+mqtt_gateway_node:
   ros__parameters:
     enabled: true
     broker_host: "8.130.34.168"
     broker_port: 1883
-    client_id: "robot-inspect-forwarder"
+    client_id: "robot-inspect-client"
     username: "admin"
     password: "public"
-    mqtt_topic: "/robot-dog/DOG001/Upload/Data"
+    upload_topic: "/robot-dog/DOG001/Upload/Data"
+    download_topic: "/robot-dog/DOG001/Download/Data"
     heartbeat_publish_period_sec: 1.0
     status_timeout_sec: 3.0
     default_signal_strength: -65
@@ -39,7 +40,33 @@ mqtt_forwarder_node:
     battery_status_topic: "/robot/battery_status"
     robot_position_topic: "/robot_position"
     mission_status_topic: "/mission/status"
+    waypoint_event_topic: "/waypoint_manager/events"
+    mission_start_service: "/mission/start"
+    get_waypoints_service: "/waypoint_manager/get_waypoints"
+    default_task_map_name: "factory_map"
+    waypoint_sync_on_connect: true
+    waypoint_sync_retry_period_sec: 5.0
     qos: 1
     retain: false
     debug_log_payload: false
     missing_state_log_period_sec: 5.0
+
+inspection_reporter_node:
+  ros__parameters:
+    enabled: true
+    album_report_topic: "/inspection/album_reports"
+    album_upload_service: "/inspection/album_report/upload"
+    device_id: "DOG001"
+    album_report_url: "https://api.xunjianxitong.click/robot-inspect/inspect/album/report"
+    partner_id: "1000009"
+    version: "1.0.0"
+    encryption_enabled: false
+    signature_enabled: false
+    signature: ""
+    aes_key: ""
+    aes_iv: ""
+    signature_secret: ""
+    timeout_sec: 15.0
+    retry_count: 2
+    verify_tls: false
+    debug_log_payload: true

@@ -1,6 +1,7 @@
 """ptz_actions — 云台相关行为树叶节点.
 
 PtzAbsoluteMove: 调用 /ptz/absolute_move 移动到绝对角度。
+WaitForDuration:按参数等待一段固定时间。
 WaitPtzStable:  订阅 /ptz/status 等待云台空闲。
 CaptureImage:   调用 /ptz/capture_image 抓拍。
 """
@@ -134,6 +135,35 @@ class PtzAbsoluteMove(py_trees.behaviour.Behaviour):
         self._future = self._client.call_async(req)
         return py_trees.common.Status.RUNNING
 
+
+class WaitForDuration(py_trees.behaviour.Behaviour):
+    """按节点参数等待一段固定时间，参数小于等于 0 时直接成功。"""
+
+    def __init__(self, name: str, node: Node, parameter_name: str, **kwargs):
+        super().__init__(name, **kwargs)
+        self._node = node
+        self._parameter_name = parameter_name
+        self._duration_sec = 0.0
+        self._start_time: float | None = None
+
+    def initialise(self) -> None:
+        self._duration_sec = max(float(self._node.get_parameter(self._parameter_name).value), 0.0)
+        self._start_time = time.monotonic()
+        if self._duration_sec > 0.0:
+            self._node.get_logger().info(
+                f'{self.name}: wait {self._duration_sec:.2f}s'
+            )
+
+    def update(self) -> py_trees.common.Status:
+        if self._duration_sec <= 0.0:
+            return py_trees.common.Status.SUCCESS
+        if self._start_time is None:
+            self._start_time = time.monotonic()
+        if (time.monotonic() - self._start_time) >= self._duration_sec:
+            return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.RUNNING
+
+
 class WaitPtzStable(py_trees.behaviour.Behaviour):
     """等待云台动作完成（active_action == 'idle'）."""
 
@@ -170,7 +200,9 @@ class CaptureImage(py_trees.behaviour.Behaviour):
     """调用 /ptz/capture_image 抓拍.
 
     写入 Blackboard:
-        /last_capture_path  — str (抓拍文件路径)
+        /last_capture_path       — str (抓拍文件路径)
+        /last_capture_url        — str (设备抓拍 URL)
+        /last_capture_file_size  — int (图片大小，字节)
     """
 
     def __init__(self, name: str, node: Node, **kwargs):
@@ -179,6 +211,8 @@ class CaptureImage(py_trees.behaviour.Behaviour):
         self._bb = self.attach_blackboard_client()
         self._bb.register_key(key='/current_waypoint', access=py_trees.common.Access.READ)
         self._bb.register_key(key='/last_capture_path', access=py_trees.common.Access.WRITE)
+        self._bb.register_key(key='/last_capture_url', access=py_trees.common.Access.WRITE)
+        self._bb.register_key(key='/last_capture_file_size', access=py_trees.common.Access.WRITE)
 
         if hasattr(self._node, '_service_audit'):
             self._audit = self._node._service_audit
@@ -212,7 +246,9 @@ class CaptureImage(py_trees.behaviour.Behaviour):
                     duration_ms=duration,
                 )
                 if result.result == 1:
-                    self._bb.set('/last_capture_path', result.file_path)
+                    self._bb.set('/last_capture_path', str(result.file_path))
+                    self._bb.set('/last_capture_url', str(result.capture_url))
+                    self._bb.set('/last_capture_file_size', int(result.file_size))
                     self._node.get_logger().info(f'Capture saved: {result.file_path}')
                     return py_trees.common.Status.SUCCESS
                 self._node.get_logger().warning(f'Capture failed: {result.message}')

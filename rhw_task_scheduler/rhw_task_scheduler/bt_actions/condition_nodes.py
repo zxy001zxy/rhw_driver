@@ -1,9 +1,11 @@
 """condition_nodes — 条件判断行为树叶节点.
 
-CheckBattery:   检查电量是否低于阈值。
-IsVisionPoint:  判断当前航点是否为视觉识别点。
-IsChargePoint:  判断当前航点是否为充电点。
-IsNormalPoint:  判断当前航点是否为普通导航点。
+CheckBattery:      检查电量是否低于阈值。
+IsVisionPoint:     判断当前航点是否为视觉识别点。
+IsChargePoint:     判断当前航点是否为充电点。
+IsFollowPathPoint: 判断当前航点是否为巡线任务。
+IsNotFollowPathPoint: 判断当前航点是否不是巡线任务。
+IsNormalPoint:     判断当前航点是否为普通导航点。
 """
 from __future__ import annotations
 
@@ -74,6 +76,36 @@ class IsChargePoint(py_trees.behaviour.Behaviour):
     def update(self) -> py_trees.common.Status:
         wp = self._bb.get('/current_waypoint')
         if wp and int(wp.get('waypoint_type', -1)) == WaypointTask.TYPE_CHARGE:
+            return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.FAILURE
+
+
+class IsFollowPathPoint(py_trees.behaviour.Behaviour):
+    """当前航点是否为 TYPE_FOLLOW_PATH，是则 SUCCESS，否则 FAILURE."""
+
+    def __init__(self, name: str, **kwargs):
+        super().__init__(name, **kwargs)
+        self._bb = self.attach_blackboard_client()
+        self._bb.register_key(key='/current_waypoint', access=py_trees.common.Access.READ)
+
+    def update(self) -> py_trees.common.Status:
+        wp = self._bb.get('/current_waypoint')
+        if wp and int(wp.get('waypoint_type', -1)) == WaypointTask.TYPE_FOLLOW_PATH:
+            return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.FAILURE
+
+
+class IsNotFollowPathPoint(py_trees.behaviour.Behaviour):
+    """当前航点不是 TYPE_FOLLOW_PATH，是则 SUCCESS，否则 FAILURE."""
+
+    def __init__(self, name: str, **kwargs):
+        super().__init__(name, **kwargs)
+        self._bb = self.attach_blackboard_client()
+        self._bb.register_key(key='/current_waypoint', access=py_trees.common.Access.READ)
+
+    def update(self) -> py_trees.common.Status:
+        wp = self._bb.get('/current_waypoint')
+        if wp and int(wp.get('waypoint_type', -1)) != WaypointTask.TYPE_FOLLOW_PATH:
             return py_trees.common.Status.SUCCESS
         return py_trees.common.Status.FAILURE
 

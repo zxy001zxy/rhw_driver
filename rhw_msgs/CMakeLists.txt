@@ -29,6 +29,7 @@ set(msg_files
   "msg/PtzStatus.msg"
   "msg/WaypointTask.msg"
   "msg/MissionStatus.msg"
+  "msg/InspectionAlbumReport.msg"
   # "msg/DynamicParams.msg"
   # "msg/Gps.msg"
 )
@@ -53,6 +54,8 @@ set(srv_files
   "srv/PtzAbsoluteMove.srv"
   "srv/PtzGetPosition.srv"
   "srv/CaptureImage.srv"
+  "srv/InspectionAlbumUpload.srv"
+  "srv/ModelTaskRun.srv"
   "srv/AddWaypoint.srv"
   "srv/DeleteWaypoint.srv"
   "srv/GetWaypoints.srv"

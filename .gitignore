@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+
+build/
+install/
+log/
+
+rhw_model_scheduler_ws/models/current/*.pt
+rhw_model_scheduler_ws/models/current/*.engine
+rhw_model_scheduler_ws/sample_data/

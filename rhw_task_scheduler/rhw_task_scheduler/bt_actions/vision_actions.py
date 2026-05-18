@@ -1,0 +1,493 @@
+"""vision_actions — 视觉点抓拍后的行为树叶节点。"""
+from __future__ import annotations
+
+import time
+
+import py_trees
+from rclpy.node import Node
+
+from rhw_msgs.srv import InspectionAlbumUpload, ModelTaskRun
+from rhw_task_scheduler.bt_utils import parse_task_params
+from rhw_task_scheduler.service_audit import ServiceAuditPublisher
+
+
+INSPECTION_ALBUM_UPLOAD_SERVICE = '/inspection/album_report/upload'
+ALBUM_UPLOAD_TIMEOUT_SEC = 30.0
+MODEL_TASK_RUN_SERVICE = '/rhw/model/task/run'
+MODEL_TASK_TIMEOUT_SEC = 60.0
+UINT32_MAX = 4294967295
+
+
+def _debug_log(logger, message: str) -> None:
+    debug = getattr(logger, 'debug', None)
+    if not callable(debug):
+        return
+    try:
+        debug(message)
+    except Exception:
+        pass
+
+
+def _node_debug(node: Node, message: str) -> None:
+    try:
+        logger = node.get_logger()
+    except Exception:
+        return
+    _debug_log(logger, message)
+
+
+def _get_or_declare_parameter(node: Node, name: str, default):
+    try:
+        if node.has_parameter(name):
+            return node.get_parameter(name).value
+    except Exception as exc:
+        _node_debug(node, f'Parameter check failed for {name}: {exc}')
+
+    try:
+        return node.declare_parameter(name, default).value
+    except Exception as exc:
+        _node_debug(node, f'Parameter declaration failed for {name}: {exc}')
+        try:
+            return node.get_parameter(name).value
+        except Exception as get_exc:
+            _node_debug(node, f'Parameter fallback get failed for {name}: {get_exc}')
+            return default
+
+
+def _get_blackboard_value(blackboard, key: str, default=None, logger=None):
+    try:
+        return blackboard.get(key)
+    except KeyError:
+        return default
+    except Exception as exc:
+        _debug_log(logger, f'Blackboard get failed for {key}: {exc}')
+        return default
+
+
+def _current_waypoint_or_none(blackboard, logger=None) -> dict | None:
+    waypoint = _get_blackboard_value(blackboard, '/current_waypoint', logger=logger)
+    return waypoint if isinstance(waypoint, dict) else None
+
+
+def _duration_ms(req_time: float | None) -> float | None:
+    return (time.time() - req_time) * 1000 if req_time else None
+
+
+def _abandon_future(client, future, logger=None) -> None:
+    if future is None:
+        return
+
+    remove_pending_request = getattr(client, 'remove_pending_request', None)
+    if callable(remove_pending_request):
+        try:
+            remove_pending_request(future)
+        except Exception as exc:
+            _debug_log(logger, f'Future remove_pending_request failed: {exc}')
+            pass
+
+    cancel = getattr(future, 'cancel', None)
+    if callable(cancel):
+        try:
+            cancel()
+        except Exception as exc:
+            _debug_log(logger, f'Future cancel failed: {exc}')
+            pass
+
+
+def _future_is_pending(future, logger=None) -> bool:
+    if future is None:
+        return False
+
+    done = getattr(future, 'done', None)
+    if not callable(done):
+        return True
+
+    try:
+        return not done()
+    except Exception as exc:
+        _debug_log(logger, f'Future done status check failed: {exc}')
+        return True
+
+
+class UploadInspectionAlbum(py_trees.behaviour.Behaviour):
+    """调用 /inspection/album_report/upload，同步判定图片上报结果。"""
+
+    def __init__(self, name: str, node: Node, **kwargs):
+        super().__init__(name, **kwargs)
+        self._node = node
+        self._bb = self.attach_blackboard_client()
+        self._bb.register_key(key='/current_waypoint', access=py_trees.common.Access.READ)
+        self._bb.register_key(key='/last_capture_path', access=py_trees.common.Access.READ)
+        self._bb.register_key(key='/last_capture_url', access=py_trees.common.Access.READ)
+        self._bb.register_key(key='/last_capture_file_size', access=py_trees.common.Access.READ)
+
+        if hasattr(self._node, '_service_audit'):
+            self._audit = self._node._service_audit
+        else:
+            self._audit = ServiceAuditPublisher(self._node)
+
+        self._service_name = str(
+            _get_or_declare_parameter(
+                self._node,
+                'inspection_album_upload_service',
+                INSPECTION_ALBUM_UPLOAD_SERVICE,
+            )
+        )
+        self._timeout_sec = max(
+            float(
+                _get_or_declare_parameter(
+                    self._node,
+                    'album_upload_timeout_sec',
+                    ALBUM_UPLOAD_TIMEOUT_SEC,
+                )
+            ),
+            0.1,
+        )
+        self._client = self._node.create_client(
+            InspectionAlbumUpload,
+            self._service_name,
+            callback_group=getattr(self._node, '_callback_group', None),
+        )
+        self._future = None
+        self._req_time: float | None = None
+        self._deadline: float | None = None
+        self._service_not_ready_logged = False
+
+    def initialise(self) -> None:
+        self._future = None
+        self._req_time = None
+        self._deadline = time.monotonic() + self._timeout_sec
+        self._service_not_ready_logged = False
+
+    def _build_request(self) -> InspectionAlbumUpload.Request | None:
+        logger = self._node.get_logger()
+        wp = _current_waypoint_or_none(self._bb, logger=logger)
+        if wp is None:
+            logger.warning(
+                'Album upload skipped: current_waypoint is missing or malformed'
+            )
+            return None
+
+        image_path = str(
+            _get_blackboard_value(self._bb, '/last_capture_path', logger=logger) or ''
+        )
+        if not image_path:
+            logger.warning('Album upload skipped: last_capture_path is empty')
+            return None
+
+        file_size_raw = _get_blackboard_value(
+            self._bb,
+            '/last_capture_file_size',
+            logger=logger,
+        )
+        if file_size_raw is None:
+            logger.warning(
+                'Album upload skipped: last_capture_file_size is missing'
+            )
+            return None
+        try:
+            file_size = int(file_size_raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                'Album upload skipped: last_capture_file_size is not an integer'
+            )
+            return None
+
+        capture_url = _get_blackboard_value(self._bb, '/last_capture_url', logger=logger)
+        if capture_url is None:
+            logger.warning('Album upload skipped: last_capture_url is missing')
+            return None
+
+        req = InspectionAlbumUpload.Request()
+        req.task_id = str(getattr(self._node, '_current_task_id', '') or '')
+        req.point_id = str(wp.get('waypoint_id', ''))
+        req.point_name = str(wp.get('label') or req.point_id)
+        req.image_path = image_path
+        req.capture_url = str(capture_url or '')
+        req.file_size = max(0, min(file_size, UINT32_MAX))
+        return req
+
+    def _timeout_failure(self, reason: str) -> py_trees.common.Status:
+        self._audit.publish(
+            service=self._service_name,
+            role='client',
+            phase='response',
+            success=False,
+            duration_ms=_duration_ms(self._req_time),
+            details={'error': reason},
+        )
+        _abandon_future(self._client, self._future, logger=self._node.get_logger())
+        self._future = None
+        self._node.get_logger().warning(reason)
+        return py_trees.common.Status.FAILURE
+
+    def _interrupt_pending_future(self, reason: str) -> None:
+        logger = self._node.get_logger()
+        if not _future_is_pending(self._future, logger=logger):
+            self._future = None
+            return
+
+        self._audit.publish(
+            service=self._service_name,
+            role='client',
+            phase='response',
+            success=False,
+            duration_ms=_duration_ms(self._req_time),
+            details={'error': reason},
+        )
+        _abandon_future(self._client, self._future, logger=logger)
+        self._future = None
+        logger.warning(reason)
+
+    def terminate(self, new_status: py_trees.common.Status) -> None:
+        if new_status == py_trees.common.Status.INVALID:
+            self._interrupt_pending_future('Album upload interrupted')
+
+    def update(self) -> py_trees.common.Status:
+        if self._future is not None:
+            if not self._future.done():
+                if self._deadline is not None and time.monotonic() > self._deadline:
+                    return self._timeout_failure('Album upload service timeout')
+                return py_trees.common.Status.RUNNING
+
+            duration = _duration_ms(self._req_time)
+            try:
+                result = self._future.result()
+            except Exception as exc:
+                self._future = None
+                self._audit.publish(
+                    service=self._service_name,
+                    role='client',
+                    phase='response',
+                    success=False,
+                    duration_ms=duration,
+                    details={'error': str(exc)},
+                )
+                self._node.get_logger().error(f'Album upload exception: {exc}')
+                return py_trees.common.Status.FAILURE
+
+            self._audit.publish(
+                service=self._service_name,
+                role='client',
+                phase='response',
+                response=result,
+                success=bool(result.ok),
+                duration_ms=duration,
+            )
+            self._future = None
+            if bool(result.ok):
+                self._node.get_logger().info(
+                    f'Album upload succeeded: trace_id={result.trace_id}'
+                )
+                return py_trees.common.Status.SUCCESS
+            self._node.get_logger().warning(
+                f'Album upload failed: code={result.code} message={result.message}'
+            )
+            return py_trees.common.Status.FAILURE
+
+        if not self._client.service_is_ready():
+            if self._deadline is not None and time.monotonic() > self._deadline:
+                return self._timeout_failure('Album upload service not ready before timeout')
+            if not self._service_not_ready_logged:
+                self._node.get_logger().warning('Album upload service not ready')
+                self._service_not_ready_logged = True
+            return py_trees.common.Status.RUNNING
+
+        req = self._build_request()
+        if req is None:
+            return py_trees.common.Status.FAILURE
+
+        self._req_time = time.time()
+        self._audit.publish(
+            service=self._service_name,
+            role='client',
+            phase='request',
+            request=req,
+        )
+        self._future = self._client.call_async(req)
+        return py_trees.common.Status.RUNNING
+
+
+class RunModelTask(py_trees.behaviour.Behaviour):
+    """调用 /rhw/model/task/run，根据 task_params.inference_type 执行模型任务。"""
+
+    def __init__(self, name: str, node: Node, **kwargs):
+        super().__init__(name, **kwargs)
+        self._node = node
+        self._bb = self.attach_blackboard_client()
+        self._bb.register_key(key='/current_waypoint', access=py_trees.common.Access.READ)
+        self._bb.register_key(
+            key='/last_model_result_json_path',
+            access=py_trees.common.Access.WRITE,
+        )
+
+        if hasattr(self._node, '_service_audit'):
+            self._audit = self._node._service_audit
+        else:
+            self._audit = ServiceAuditPublisher(self._node)
+
+        self._service_name = str(
+            _get_or_declare_parameter(
+                self._node,
+                'model_task_run_service',
+                MODEL_TASK_RUN_SERVICE,
+            )
+        )
+        self._timeout_sec = max(
+            float(
+                _get_or_declare_parameter(
+                    self._node,
+                    'model_task_timeout_sec',
+                    MODEL_TASK_TIMEOUT_SEC,
+                )
+            ),
+            0.1,
+        )
+        self._client = self._node.create_client(
+            ModelTaskRun,
+            self._service_name,
+            callback_group=getattr(self._node, '_callback_group', None),
+        )
+        self._future = None
+        self._req_time: float | None = None
+        self._deadline: float | None = None
+        self._service_not_ready_logged = False
+
+    def initialise(self) -> None:
+        self._future = None
+        self._req_time = None
+        self._deadline = time.monotonic() + self._timeout_sec
+        self._service_not_ready_logged = False
+
+    def _build_request(self) -> ModelTaskRun.Request | None:
+        logger = self._node.get_logger()
+        wp = _current_waypoint_or_none(self._bb, logger=logger)
+        if wp is None:
+            logger.warning(
+                'Model task skipped: current_waypoint is missing or malformed'
+            )
+            return None
+        params = parse_task_params(wp)
+        task_name = str(params.get('inference_type', '')).strip()
+        if not task_name:
+            self._node.get_logger().warning(
+                'Model task skipped: task_params.inference_type is empty'
+            )
+            return None
+
+        task_id = str(getattr(self._node, '_current_task_id', '') or 'mission')
+        waypoint_id = str(wp.get('waypoint_id') or 'waypoint')
+
+        req = ModelTaskRun.Request()
+        req.request_id = f'{task_id}-{waypoint_id}-{time.time_ns()}'
+        req.task_name = task_name
+        req.conf = 0.25
+        req.iou = 0.45
+        req.max_det = 100
+        req.wait_for_frame_timeout_sec = 3.0
+        req.max_frame_age_sec = 2.0
+        req.params_json = ''
+        return req
+
+    def _timeout_failure(self, reason: str) -> py_trees.common.Status:
+        self._audit.publish(
+            service=self._service_name,
+            role='client',
+            phase='response',
+            success=False,
+            duration_ms=_duration_ms(self._req_time),
+            details={'error': reason},
+        )
+        _abandon_future(self._client, self._future, logger=self._node.get_logger())
+        self._future = None
+        self._node.get_logger().warning(reason)
+        return py_trees.common.Status.FAILURE
+
+    def _interrupt_pending_future(self, reason: str) -> None:
+        logger = self._node.get_logger()
+        if not _future_is_pending(self._future, logger=logger):
+            self._future = None
+            return
+
+        self._audit.publish(
+            service=self._service_name,
+            role='client',
+            phase='response',
+            success=False,
+            duration_ms=_duration_ms(self._req_time),
+            details={'error': reason},
+        )
+        _abandon_future(self._client, self._future, logger=logger)
+        self._future = None
+        logger.warning(reason)
+
+    def terminate(self, new_status: py_trees.common.Status) -> None:
+        if new_status == py_trees.common.Status.INVALID:
+            self._interrupt_pending_future('Model task interrupted')
+
+    def update(self) -> py_trees.common.Status:
+        if self._future is not None:
+            if not self._future.done():
+                if self._deadline is not None and time.monotonic() > self._deadline:
+                    return self._timeout_failure('Model task service timeout')
+                return py_trees.common.Status.RUNNING
+
+            duration = _duration_ms(self._req_time)
+            try:
+                result = self._future.result()
+            except Exception as exc:
+                self._future = None
+                self._audit.publish(
+                    service=self._service_name,
+                    role='client',
+                    phase='response',
+                    success=False,
+                    duration_ms=duration,
+                    details={'error': str(exc)},
+                )
+                self._node.get_logger().error(f'Model task exception: {exc}')
+                return py_trees.common.Status.FAILURE
+
+            self._audit.publish(
+                service=self._service_name,
+                role='client',
+                phase='response',
+                response=result,
+                success=bool(result.ok),
+                duration_ms=duration,
+            )
+            self._future = None
+            if bool(result.ok):
+                self._bb.set('/last_model_result_json_path', str(result.result_json_path))
+                self._node.get_logger().info(
+                    'Model task succeeded: '
+                    f'task_name={result.task_name} items={result.item_count} '
+                    f'result={result.result_json_path}'
+                )
+                return py_trees.common.Status.SUCCESS
+            self._node.get_logger().warning(
+                f'Model task failed: code={result.code} message={result.message}'
+            )
+            return py_trees.common.Status.FAILURE
+
+        if not self._client.service_is_ready():
+            if self._deadline is not None and time.monotonic() > self._deadline:
+                return self._timeout_failure('Model task service not ready before timeout')
+            if not self._service_not_ready_logged:
+                self._node.get_logger().warning('Model task service not ready')
+                self._service_not_ready_logged = True
+            return py_trees.common.Status.RUNNING
+
+        req = self._build_request()
+        if req is None:
+            return py_trees.common.Status.FAILURE
+
+        self._req_time = time.time()
+        self._audit.publish(
+            service=self._service_name,
+            role='client',
+            phase='request',
+            request=req,
+        )
+        self._future = self._client.call_async(req)
+        return py_trees.common.Status.RUNNING

@@ -5,6 +5,7 @@
 uint8 TYPE_NORMAL=0             # 普通导航点（到达即完成）
 uint8 TYPE_CHARGE=1             # 充电点位（到达后执行充电）
 uint8 TYPE_VISION=2             # 视觉识别点（到达后执行 PTZ+抓拍+推理）
+uint8 TYPE_FOLLOW_PATH=3        # 巡线任务（执行 Nav2 FollowPath）
 
 # 航点唯一标识（UUID 或自定义编号）
 string waypoint_id
@@ -24,8 +25,11 @@ string label
 # 任务参数，JSON 字符串
 # 示例（TYPE_VISION）:
 #   {"azimuth": 180.0, "elevation": 0.0, "channel": 1,
-#    "zoom": 6.5, "azimuth_speed": 50, "elevation_speed": 50, "inference_type": "det"}
+#    "zoom": 6.5, "azimuth_speed": 50, "elevation_speed": 50,
+#    "inference_type": "fire_equipment_detection"}
 # 示例（TYPE_CHARGE）:
 #   {"timeout_sec": 300}
+# 示例（TYPE_FOLLOW_PATH）:
+#   {"path": [{"x": 1.0, "y": 0.0, "theta": 0.0}, {"x": 2.0, "y": 0.0, "theta": 0.0}]}
 # 普通导航点可留空
 string task_params

@@ -13,14 +13,31 @@ from pathlib import Path
 from typing import Any
 
 import rclpy
+from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import PoseStamped
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
-from rhw_msgs.msg import NavigationStatus, PtzStatus, UdpBatteryStatus, WaypointTask
-from rhw_msgs.srv import CaptureImage, Goal, GetWaypoints, PtzAbsoluteMove, Recharge
+from rhw_msgs.msg import PtzStatus, UdpBatteryStatus, WaypointTask
+from rhw_msgs.srv import (
+    CaptureImage,
+    GetWaypoints,
+    InspectionAlbumUpload,
+    ModelTaskRun,
+    PtzAbsoluteMove,
+    Recharge,
+)
 from rhw_task_scheduler.service_audit import ServiceAuditPublisher
+
+try:
+    from nav2_msgs.action import FollowPath, NavigateToPose
+    _HAS_NAV2_MSGS = True
+except ImportError:
+    FollowPath = None
+    NavigateToPose = None
+    _HAS_NAV2_MSGS = False
 
 
 class MissionTestMocks(Node):
@@ -37,7 +54,6 @@ class MissionTestMocks(Node):
         self._read_parameters()
         self._waypoints_by_map = self._load_waypoints()
 
-        self._nav_goal: PoseStamped | None = None
         self._last_ptz_pose = {
             'channel': int(self._default_ptz_channel),
             'azimuth': 0.0,
@@ -47,13 +63,15 @@ class MissionTestMocks(Node):
         self._ptz_online = True
 
         self._waypoints_srv = None
-        self._goal_srv = None
+        self._navigate_to_pose_server = None
+        self._follow_path_server = None
         self._ptz_move_srv = None
         self._ptz_capture_srv = None
+        self._album_upload_srv = None
+        self._model_task_srv = None
         self._recharge_srv = None
         self._battery_timer = None
 
-        self._nav_pub = None
         self._ptz_pub = None
         self._battery_pub = None
 
@@ -66,18 +84,25 @@ class MissionTestMocks(Node):
         self.declare_parameter('use_real_ptz', True)
         self.declare_parameter('use_real_recharge', False)
         self.declare_parameter('use_real_battery', False)
+        self.declare_parameter('use_real_album_upload', False)
+        self.declare_parameter('use_real_model_task', False)
 
         self.declare_parameter('map_name', 'factory_map')
         self.declare_parameter('waypoints_json', '')
 
         self.declare_parameter('waypoints_service', '/test/waypoint_manager/get_waypoints')
-        self.declare_parameter('goal_service', '/test/move_base_simple/goal')
-        self.declare_parameter('nav_status_topic', '/test/navigation_status')
+        self.declare_parameter('navigate_to_pose_action', '/navigate_to_pose')
+        self.declare_parameter('follow_path_action', '/follow_path')
         self.declare_parameter('ptz_absolute_move_service', '/test/ptz/absolute_move')
         self.declare_parameter('ptz_capture_service', '/test/ptz/capture_image')
         self.declare_parameter('ptz_status_topic', '/test/ptz/status')
         self.declare_parameter('recharge_service', '/test/recharge')
         self.declare_parameter('battery_topic', '/test/robot/battery_status')
+        self.declare_parameter(
+            'album_upload_service',
+            '/test/inspection/album_report/upload',
+        )
+        self.declare_parameter('model_task_run_service', '/test/rhw/model/task/run')
 
         self.declare_parameter('default_ptz_channel', 1)
         self.declare_parameter('navigation_delay_sec', 1.2)
@@ -87,6 +112,8 @@ class MissionTestMocks(Node):
         self.declare_parameter('navigation_result', 'reached')
         self.declare_parameter('recharge_result', 1)
         self.declare_parameter('capture_save_dir', '/tmp/rhw_task_scheduler_mock')
+        self.declare_parameter('album_upload_result', True)
+        self.declare_parameter('model_task_result', True)
 
     def _read_parameters(self) -> None:
         self._use_real_waypoints = bool(self.get_parameter('use_real_waypoints').value)
@@ -94,13 +121,19 @@ class MissionTestMocks(Node):
         self._use_real_ptz = bool(self.get_parameter('use_real_ptz').value)
         self._use_real_recharge = bool(self.get_parameter('use_real_recharge').value)
         self._use_real_battery = bool(self.get_parameter('use_real_battery').value)
+        self._use_real_album_upload = bool(
+            self.get_parameter('use_real_album_upload').value
+        )
+        self._use_real_model_task = bool(self.get_parameter('use_real_model_task').value)
 
         self._map_name = str(self.get_parameter('map_name').value)
         self._waypoints_json = str(self.get_parameter('waypoints_json').value)
 
         self._waypoints_service = str(self.get_parameter('waypoints_service').value)
-        self._goal_service = str(self.get_parameter('goal_service').value)
-        self._nav_status_topic = str(self.get_parameter('nav_status_topic').value)
+        self._navigate_to_pose_action = str(
+            self.get_parameter('navigate_to_pose_action').value
+        )
+        self._follow_path_action = str(self.get_parameter('follow_path_action').value)
         self._ptz_absolute_move_service = str(
             self.get_parameter('ptz_absolute_move_service').value
         )
@@ -108,6 +141,12 @@ class MissionTestMocks(Node):
         self._ptz_status_topic = str(self.get_parameter('ptz_status_topic').value)
         self._recharge_service = str(self.get_parameter('recharge_service').value)
         self._battery_topic = str(self.get_parameter('battery_topic').value)
+        self._album_upload_service = str(
+            self.get_parameter('album_upload_service').value
+        )
+        self._model_task_run_service = str(
+            self.get_parameter('model_task_run_service').value
+        )
 
         self._default_ptz_channel = int(self.get_parameter('default_ptz_channel').value)
         self._navigation_delay_sec = max(
@@ -125,6 +164,10 @@ class MissionTestMocks(Node):
         self._capture_save_dir = Path(
             str(self.get_parameter('capture_save_dir').value)
         ).expanduser()
+        self._album_upload_result = bool(
+            self.get_parameter('album_upload_result').value
+        )
+        self._model_task_result = bool(self.get_parameter('model_task_result').value)
 
     def _setup_interfaces(self) -> None:
         if not self._use_real_waypoints:
@@ -136,17 +179,30 @@ class MissionTestMocks(Node):
             )
 
         if not self._use_real_navigation:
-            self._nav_pub = self.create_publisher(NavigationStatus, self._nav_status_topic, 10)
-            self._goal_srv = self.create_service(
-                Goal,
-                self._goal_service,
-                self._handle_goal,
-                callback_group=self._callback_group,
-            )
-            self._publish_navigation_status(
-                NavigationStatus.STATUS_IDLE,
-                message='mock navigation ready',
-            )
+            if _HAS_NAV2_MSGS:
+                self._navigate_to_pose_server = ActionServer(
+                    self,
+                    NavigateToPose,
+                    self._navigate_to_pose_action,
+                    execute_callback=self._execute_navigate_to_pose,
+                    goal_callback=self._handle_action_goal,
+                    cancel_callback=self._handle_action_cancel,
+                    callback_group=self._callback_group,
+                )
+                self._follow_path_server = ActionServer(
+                    self,
+                    FollowPath,
+                    self._follow_path_action,
+                    execute_callback=self._execute_follow_path,
+                    goal_callback=self._handle_action_goal,
+                    cancel_callback=self._handle_action_cancel,
+                    callback_group=self._callback_group,
+                )
+            else:
+                self.get_logger().warning(
+                    'nav2_msgs is not installed; mock /navigate_to_pose and '
+                    '/follow_path action servers are disabled'
+                )
 
         if not self._use_real_ptz:
             self._ptz_pub = self.create_publisher(PtzStatus, self._ptz_status_topic, 10)
@@ -158,11 +214,27 @@ class MissionTestMocks(Node):
             )
             self._ptz_capture_srv = self.create_service(
                 CaptureImage,
-                self._ptz_capture_service, 
+                self._ptz_capture_service,
                 self._handle_capture_image,
                 callback_group=self._callback_group,
             )
             self._publish_ptz_status(active_action='idle', message='mock ptz ready')
+
+        if not self._use_real_album_upload:
+            self._album_upload_srv = self.create_service(
+                InspectionAlbumUpload,
+                self._album_upload_service,
+                self._handle_album_upload,
+                callback_group=self._callback_group,
+            )
+
+        if not self._use_real_model_task:
+            self._model_task_srv = self.create_service(
+                ModelTaskRun,
+                self._model_task_run_service,
+                self._handle_model_task_run,
+                callback_group=self._callback_group,
+            )
 
         if not self._use_real_recharge:
             self._recharge_srv = self.create_service(
@@ -186,6 +258,8 @@ class MissionTestMocks(Node):
             f'waypoints={not self._use_real_waypoints} '
             f'nav={not self._use_real_navigation} '
             f'ptz={not self._use_real_ptz} '
+            f'album_upload={not self._use_real_album_upload} '
+            f'model_task={not self._use_real_model_task} '
             f'recharge={not self._use_real_recharge} '
             f'battery={not self._use_real_battery}'
         )
@@ -251,6 +325,7 @@ class MissionTestMocks(Node):
                             'channel': self._default_ptz_channel,
                             'azimuth_speed': 50,
                             'elevation_speed': 50,
+                            'inference_type': 'fire_equipment_detection',
                         },
                         ensure_ascii=False,
                     ),
@@ -264,6 +339,25 @@ class MissionTestMocks(Node):
                     'waypoint_type': WaypointTask.TYPE_CHARGE,
                     'label': 'mock recharge',
                     'task_params': json.dumps({'timeout_sec': 300}, ensure_ascii=False),
+                },
+                map_name,
+            ),
+            self._spec_to_waypoint(
+                {
+                    'waypoint_id': 'follow_path_001',
+                    'pose': {'x': 0.0, 'y': 0.0, 'theta': 0.0},
+                    'waypoint_type': WaypointTask.TYPE_FOLLOW_PATH,
+                    'label': 'mock follow path',
+                    'task_params': json.dumps(
+                        {
+                            'path': [
+                                {'x': 0.0, 'y': 0.0, 'theta': 0.0},
+                                {'x': 1.0, 'y': 0.4, 'theta': 0.0},
+                                {'x': 2.0, 'y': 0.0, 'theta': 0.0},
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
                 },
                 map_name,
             ),
@@ -284,8 +378,20 @@ class MissionTestMocks(Node):
         wp.pose.theta = float(pose.get('theta', 0.0))
         wp.waypoint_type = int(spec.get('waypoint_type', WaypointTask.TYPE_NORMAL))
         wp.label = str(spec.get('label', wp.waypoint_id))
-        wp.task_params = str(spec.get('task_params', ''))
+        task_params = spec.get('task_params', '')
+        if isinstance(task_params, (dict, list)):
+            wp.task_params = json.dumps(task_params, ensure_ascii=False)
+        else:
+            wp.task_params = str(task_params)
         return wp
+
+    def _handle_action_goal(self, goal_request) -> GoalResponse:
+        del goal_request
+        return GoalResponse.ACCEPT
+
+    def _handle_action_cancel(self, goal_handle) -> CancelResponse:
+        del goal_handle
+        return CancelResponse.ACCEPT
 
     def _schedule_once(self, delay_sec: float, callback) -> None:
         delay_sec = max(float(delay_sec), 0.0)
@@ -357,85 +463,98 @@ class MissionTestMocks(Node):
         )
         return response
 
-    def _handle_goal(self, request: Goal.Request, response: Goal.Response) -> Goal.Response:
-        started_at = time.monotonic()
-        self._audit.publish(
-            service=self._goal_service,
-            role='server',
-            phase='request',
-            request=request,
-        )
-
-        self._nav_goal = request.goal
-        self._publish_navigation_status(
-            NavigationStatus.STATUS_NAVIGATING,
-            message='mock navigating',
-            goal=request.goal,
-            remaining_distance=12.0,
-            estimated_time=max(self._navigation_delay_sec, 0.1) * 2.0,
-        )
-        self._schedule_once(self._navigation_delay_sec, self._finish_navigation)
-
-        response.result = 1
-        self._audit.publish(
-            service=self._goal_service,
-            role='server',
-            phase='response',
-            request=request,
-            response=response,
-            success=True,
-            duration_ms=(time.monotonic() - started_at) * 1000.0,
-            details={'result': 'accepted', 'final_state': self._navigation_result},
-        )
+    def _execute_navigate_to_pose(self, goal_handle):
+        request = goal_handle.request
+        goal = request.pose
         self.get_logger().info(
-            'Goal accepted: '
-            f'({request.goal.pose.position.x:.2f}, {request.goal.pose.position.y:.2f})'
+            'NavigateToPose accepted: '
+            f'({goal.pose.position.x:.2f}, {goal.pose.position.y:.2f})'
         )
-        return response
 
-    def _finish_navigation(self) -> None:
+        result = NavigateToPose.Result()
+        if not self._publish_nav2_feedback(goal_handle, goal):
+            return result
+
         if self._navigation_result == 'failed':
-            status = NavigationStatus.STATUS_FAILED
-            message = 'mock navigation failed'
+            goal_handle.abort()
         elif self._navigation_result == 'cancelled':
-            status = NavigationStatus.STATUS_CANCELLED
-            message = 'mock navigation cancelled'
+            goal_handle.canceled()
         else:
-            status = NavigationStatus.STATUS_REACHED
-            message = 'mock reached'
+            goal_handle.succeed()
+        return result
 
-        self._publish_navigation_status(
-            status,
-            message=message,
-            goal=self._nav_goal,
-            remaining_distance=0.0,
-            estimated_time=0.0,
-        )
+    def _execute_follow_path(self, goal_handle):
+        request = goal_handle.request
+        path_points = len(request.path.poses)
+        self.get_logger().info(f'FollowPath accepted: points={path_points}')
 
-    def _publish_navigation_status(
-        self,
-        status: int,
-        *,
-        message: str,
-        goal: PoseStamped | None = None,
-        remaining_distance: float = -1.0,
-        estimated_time: float = -1.0,
-    ) -> None:
-        if self._nav_pub is None:
-            return
+        result = FollowPath.Result()
+        if not self._publish_follow_path_feedback(goal_handle, path_points):
+            return result
 
-        msg = NavigationStatus()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.status = int(status)
-        if goal is None:
-            goal = PoseStamped()
-            goal.header.stamp = msg.header.stamp
-            goal.header.frame_id = 'map'
-        msg.current_goal = goal
-        msg.remaining_distance = float(remaining_distance)
-        msg.estimated_time = float(estimated_time)
-        msg.message = str(message)
-        self._nav_pub.publish(msg)
+        if self._navigation_result == 'failed':
+            if hasattr(result, 'error_code'):
+                result.error_code = 1
+            if hasattr(result, 'error_msg'):
+                result.error_msg = 'mock FollowPath failed'
+            goal_handle.abort()
+        elif self._navigation_result == 'cancelled':
+            goal_handle.canceled()
+        else:
+            goal_handle.succeed()
+        return result
+
+    def _publish_nav2_feedback(self, goal_handle, goal: PoseStamped) -> bool:
+        steps = max(int(self._navigation_delay_sec / 0.2), 1)
+        step_sec = self._navigation_delay_sec / float(steps)
+        for index in range(steps):
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                return False
+
+            feedback = NavigateToPose.Feedback()
+            if hasattr(feedback, 'current_pose'):
+                feedback.current_pose = goal
+            if hasattr(feedback, 'distance_remaining'):
+                feedback.distance_remaining = float(steps - index) / float(steps)
+            if hasattr(feedback, 'estimated_time_remaining'):
+                feedback.estimated_time_remaining = self._duration_from_sec(
+                    (steps - index) * step_sec
+                )
+            if hasattr(feedback, 'navigation_time'):
+                feedback.navigation_time = self._duration_from_sec(index * step_sec)
+            if hasattr(feedback, 'number_of_recoveries'):
+                feedback.number_of_recoveries = 0
+            goal_handle.publish_feedback(feedback)
+            time.sleep(step_sec)
+        return True
+
+    def _publish_follow_path_feedback(self, goal_handle, path_points: int) -> bool:
+        steps = max(int(self._navigation_delay_sec / 0.2), 1)
+        for index in range(steps):
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                return False
+
+            feedback = FollowPath.Feedback()
+            if hasattr(feedback, 'distance_to_goal'):
+                feedback.distance_to_goal = float(steps - index) / float(steps)
+            if hasattr(feedback, 'speed'):
+                feedback.speed = 0.3
+            if hasattr(feedback, 'current_pose') and path_points > 0:
+                feedback.current_pose = goal_handle.request.path.poses[
+                    min(index, path_points - 1)
+                ]
+            goal_handle.publish_feedback(feedback)
+            time.sleep(self._navigation_delay_sec / float(steps))
+        return True
+
+    @staticmethod
+    def _duration_from_sec(seconds: float) -> Duration:
+        duration = Duration()
+        duration.sec = int(seconds)
+        duration.nanosec = int((seconds - duration.sec) * 1_000_000_000)
+        return duration
 
     def _handle_ptz_move(
         self, request: PtzAbsoluteMove.Request, response: PtzAbsoluteMove.Response
@@ -555,6 +674,87 @@ class MissionTestMocks(Node):
         self.get_logger().info(f'CaptureImage saved mock file: {save_path}')
         return response
 
+    def _handle_album_upload(
+        self,
+        request: InspectionAlbumUpload.Request,
+        response: InspectionAlbumUpload.Response,
+    ) -> InspectionAlbumUpload.Response:
+        started_at = time.monotonic()
+        self._audit.publish(
+            service=self._album_upload_service,
+            role='server',
+            phase='request',
+            request=request,
+        )
+
+        response.ok = bool(self._album_upload_result)
+        response.code = 'OK' if response.ok else 'MOCK_UPLOAD_FAILED'
+        response.message = (
+            'mock album upload ok' if response.ok else 'mock album upload failed'
+        )
+        response.trace_id = f'mock-{time.time_ns()}'
+        response.http_status = 200 if response.ok else 500
+        response.response_body = '{"code":0}' if response.ok else '{"code":500}'
+
+        self._audit.publish(
+            service=self._album_upload_service,
+            role='server',
+            phase='response',
+            request=request,
+            response=response,
+            success=response.ok,
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+        )
+        self.get_logger().info(
+            f'InspectionAlbumUpload result={response.ok} image={request.image_path}'
+        )
+        return response
+
+    def _handle_model_task_run(
+        self,
+        request: ModelTaskRun.Request,
+        response: ModelTaskRun.Response,
+    ) -> ModelTaskRun.Response:
+        started_at = time.monotonic()
+        self._audit.publish(
+            service=self._model_task_run_service,
+            role='server',
+            phase='request',
+            request=request,
+        )
+
+        response.ok = bool(self._model_task_result)
+        response.code = 'OK' if response.ok else 'MOCK_MODEL_FAILED'
+        response.message = 'mock model task ok' if response.ok else 'mock model task failed'
+        response.request_id = str(request.request_id)
+        response.task_name = str(request.task_name)
+        response.task_type = 'mock'
+        response.model_path = '/tmp/mock_model.engine'
+        response.backend = 'mock'
+        response.frame_path = '/tmp/mock_frame.jpg'
+        response.result_json_path = f'/tmp/mock_model_result_{request.request_id}.json'
+        response.item_count = 1 if response.ok else 0
+        response.error_count = 0 if response.ok else 1
+        response.latency_ms = 12.3
+        response.error_category = '' if response.ok else 'mock_error'
+        response.detail_json = (
+            '{"items":[{"label":"mock","score":0.99}]}' if response.ok else '{}'
+        )
+
+        self._audit.publish(
+            service=self._model_task_run_service,
+            role='server',
+            phase='response',
+            request=request,
+            response=response,
+            success=response.ok,
+            duration_ms=(time.monotonic() - started_at) * 1000.0,
+        )
+        self.get_logger().info(
+            f'ModelTaskRun result={response.ok} task_name={request.task_name}'
+        )
+        return response
+
     def _handle_recharge(
         self, request: Recharge.Request, response: Recharge.Response
     ) -> Recharge.Response:
@@ -598,6 +798,12 @@ class MissionTestMocks(Node):
         self._battery_pub.publish(msg)
 
     def destroy_node(self) -> bool:
+        for action_server in (self._navigate_to_pose_server, self._follow_path_server):
+            if action_server is not None:
+                try:
+                    action_server.destroy()
+                except Exception:
+                    pass
         with self._timer_lock:
             timers = list(self._one_shot_timers)
             self._one_shot_timers.clear()

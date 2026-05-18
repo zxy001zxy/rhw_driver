@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -41,11 +42,31 @@ class PtzControllerNode(Node):
         self.declare_parameter('default_duration_ms', 350)
         self.declare_parameter('status_publish_period', 2.0)
         self.declare_parameter('capture_save_dir', '/tmp/ptz_captures')
+        self.declare_parameter('absolute_move_wait_until_reached', True)
+        self.declare_parameter('absolute_move_timeout_sec', 15.0)
+        self.declare_parameter('absolute_move_poll_period_sec', 0.5)
+        self.declare_parameter('absolute_move_angle_tolerance_deg', 1.0)
+        self.declare_parameter('absolute_move_zoom_tolerance', 0.2)
 
         self._default_channel: int = self.get_parameter('default_channel').value
         self._capture_save_dir: str = str(self.get_parameter('capture_save_dir').value)
         self._default_speed: int = self.get_parameter('default_speed').value
         self._default_duration_ms: int = self.get_parameter('default_duration_ms').value
+        self._absolute_move_wait_until_reached = bool(
+            self.get_parameter('absolute_move_wait_until_reached').value
+        )
+        self._absolute_move_timeout_sec = max(
+            float(self.get_parameter('absolute_move_timeout_sec').value), 0.1
+        )
+        self._absolute_move_poll_period_sec = max(
+            float(self.get_parameter('absolute_move_poll_period_sec').value), 0.1
+        )
+        self._absolute_move_angle_tolerance_deg = max(
+            float(self.get_parameter('absolute_move_angle_tolerance_deg').value), 0.0
+        )
+        self._absolute_move_zoom_tolerance = max(
+            float(self.get_parameter('absolute_move_zoom_tolerance').value), 0.0
+        )
 
         # ---- PtzController 实例 ----
         self._ptz = PtzController(
@@ -210,6 +231,16 @@ class PtzControllerNode(Node):
             if ok:
                 self._online = True
                 self._active_action = 'moving'
+                if self._absolute_move_wait_until_reached:
+                    reached, wait_message = self._wait_for_absolute_move_reached(
+                        channel=channel,
+                        target_azimuth=azimuth,
+                        target_elevation=elevation,
+                        target_zoom=zoom,
+                    )
+                    response.result = 1 if reached else 0
+                    response.message = wait_message
+                self._active_action = 'idle'
             return response
         except PtzError as exc:
             response.result = 0
@@ -420,6 +451,78 @@ class PtzControllerNode(Node):
     # ===================================================================
     #  工具
     # ===================================================================
+    def _wait_for_absolute_move_reached(
+        self,
+        *,
+        channel: int,
+        target_azimuth: float,
+        target_elevation: float,
+        target_zoom: Optional[float],
+    ) -> tuple[bool, str]:
+        deadline = time.monotonic() + self._absolute_move_timeout_sec
+        last_message = 'waiting for PTZ absolute position'
+        last_azimuth: float | None = None
+        last_elevation: float | None = None
+        last_zoom: float | None = None
+
+        while time.monotonic() <= deadline:
+            result = self._ptz.get_absolute_ex(channel=channel)
+            if not bool(result.get('ok')):
+                last_message = self._extract_message(result)
+                time.sleep(self._absolute_move_poll_period_sec)
+                continue
+
+            azimuth = result.get('azimuth')
+            elevation = result.get('elevation')
+            zoom = result.get('zoom')
+            last_azimuth = float(azimuth) if azimuth is not None else None
+            last_elevation = float(elevation) if elevation is not None else None
+            last_zoom = float(zoom) if zoom is not None else None
+
+            self._online = True
+            if last_azimuth is not None:
+                self._last_azimuth = last_azimuth
+            if last_elevation is not None:
+                self._last_elevation = last_elevation
+            if last_zoom is not None:
+                self._last_zoom = last_zoom
+
+            if last_azimuth is None or last_elevation is None:
+                last_message = 'position response missing azimuth/elevation'
+                time.sleep(self._absolute_move_poll_period_sec)
+                continue
+
+            azimuth_error = self._angle_error_deg(last_azimuth, target_azimuth)
+            elevation_error = abs(last_elevation - target_elevation)
+            zoom_ok = True
+            zoom_error = 0.0
+            if target_zoom is not None and last_zoom is not None:
+                zoom_error = abs(last_zoom - target_zoom)
+                zoom_ok = zoom_error <= self._absolute_move_zoom_tolerance
+
+            position_ok = (
+                azimuth_error <= self._absolute_move_angle_tolerance_deg
+                and elevation_error <= self._absolute_move_angle_tolerance_deg
+                and zoom_ok
+            )
+            last_message = (
+                f'current azimuth={last_azimuth:.2f}, elevation={last_elevation:.2f}, '
+                f'zoom={last_zoom if last_zoom is not None else "unknown"}; '
+                f'error azimuth={azimuth_error:.2f}, elevation={elevation_error:.2f}, '
+                f'zoom={zoom_error:.2f}'
+            )
+            if position_ok:
+                return True, f'absolute move reached: {last_message}'
+
+            time.sleep(self._absolute_move_poll_period_sec)
+
+        return False, f'absolute move timeout: {last_message}'
+
+    @staticmethod
+    def _angle_error_deg(current: float, target: float) -> float:
+        error = (current - target + 180.0) % 360.0 - 180.0
+        return abs(error)
+
     @staticmethod
     def _extract_message(result: dict) -> str:
         """从 PtzController 返回的 dict 中提取人类可读信息。"""

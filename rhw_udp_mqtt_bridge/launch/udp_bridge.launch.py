@@ -13,9 +13,14 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'enable_mqtt_forwarder',
+            'enable_mqtt_gateway',
             default_value='true',
-            description='Whether to launch mqtt_forwarder_node together with udp_bridge_node',
+            description='Whether to launch mqtt_gateway_node together with udp_bridge_node',
+        ),
+        DeclareLaunchArgument(
+            'enable_inspection_reporter',
+            default_value='true',
+            description='Whether to launch inspection_reporter_node for HTTPS album reports',
         ),
         Node(
             package='rhw_udp_mqtt_bridge',
@@ -26,10 +31,18 @@ def generate_launch_description() -> LaunchDescription:
         ),
         Node(
             package='rhw_udp_mqtt_bridge',
-            executable='mqtt_forwarder_node',
-            name='mqtt_forwarder_node',
+            executable='mqtt_gateway_node',
+            name='mqtt_gateway_node',
             output='screen',
             parameters=[str(config_file)],
-            condition=IfCondition(LaunchConfiguration('enable_mqtt_forwarder')),
+            condition=IfCondition(LaunchConfiguration('enable_mqtt_gateway')),
+        ),
+        Node(
+            package='rhw_udp_mqtt_bridge',
+            executable='inspection_reporter_node',
+            name='inspection_reporter_node',
+            output='screen',
+            parameters=[str(config_file)],
+            condition=IfCondition(LaunchConfiguration('enable_inspection_reporter')),
         ),
     ])

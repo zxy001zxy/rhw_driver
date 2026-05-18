@@ -115,6 +115,7 @@
     "taskPeriod": 1,
     "inspectCount": 1,
     "taskStartTime": 1713081600000,
+    "mapName": "factory_map",
     "pointIdList": ["P_A01", "P_A02", "P_B03", "P_C01"]
   }
 }
@@ -135,6 +136,7 @@
 | message.taskPeriod | Integer | 是 | 任务周期：`1=单次执行`，`2=每天重复执行` |
 | message.inspectCount | Integer | 是 | 巡检次数 |
 | message.taskStartTime | Long | 是 | 任务开始时间，Unix 时间戳，单位毫秒 |
+| message.mapName | String | 建议 | 地图名称；如果平台不下发，机器人侧使用 `default_task_map_name` 配置 |
 | message.pointIdList | Array | 是 | 巡检点位 ID 列表，按顺序执行 |
 
 ### 2.5 处理逻辑
@@ -160,7 +162,11 @@
 
 ### 3.3 同步频率/时机
 
-需要厂商补充。
+- 收到任务下发后，机器狗调用本地 `/mission/start`，根据返回结果立即上报一次任务响应。
+- 任务执行过程中，`mqtt_gateway_node` 监听 `/mission/status`，当任务状态、进度或错误信息变化时上报。
+- 任务完成、取消或异常失败时，上报最终状态；最终状态上报后，当前 MQTT 任务上下文结束。
+- 任务执行时长 `taskDuration` 从任务被 `/mission/start` 接受后开始累计，单位为毫秒。
+- 任务进度 `taskProgress` 按 `completed_waypoints / total_waypoints * 100` 计算并四舍五入。
 
 ### 3.4 消息体
 
@@ -218,13 +224,49 @@
 }
 ```
 
+#### 3.4.4 完成通知
+
+```json
+{
+  "type": "response",
+  "method": "task",
+  "code": 0,
+  "msgid": 3,
+  "message": {
+    "taskId": "123456",
+    "taskProgress": 100,
+    "taskDuration": 238000,
+    "taskStatus": 4,
+    "errorMsg": ""
+  }
+}
+```
+
+#### 3.4.5 异常/失败通知
+
+```json
+{
+  "type": "response",
+  "method": "task",
+  "code": 1,
+  "msgid": 4,
+  "message": {
+    "taskId": "123456",
+    "taskProgress": 40,
+    "taskDuration": 89000,
+    "taskStatus": 6,
+    "errorMsg": "导航失败"
+  }
+}
+```
+
 ### 3.5 字段说明
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | type | String | 是 | 消息类型，固定值 `response` |
 | method | String | 是 | 方法名，固定值 `task` |
-| code | Integer | 是 | 响应码：`0=接受任务`，非 `0=拒绝任务` |
+| code | Integer | 是 | 响应码：`0=任务接受/正常状态上报`，非 `0=拒绝任务/异常失败` |
 | msgid | Integer | 是 | 消息 ID |
 | message | Object | 是 | 任务状态信息 |
 | message.taskId | String | 是 | 任务 ID |
@@ -249,6 +291,15 @@
 - `code=0`：机器人平台更新任务状态为 `taskStatus`
 - `code!=0`：机器人平台更新任务状态为异常，并记录错误原因
 - 任务执行过程中可多次上报进度
+- 当前 ROS 状态到 MQTT 状态的映射如下：
+
+| ROS `/mission/status` | MQTT `taskStatus` | 说明 |
+|-----------------------|-------------------|------|
+| `RUNNING` | 3 | 进行中 |
+| `PAUSED` | 3 | 平台状态枚举暂无暂停值，暂按进行中上报 |
+| `COMPLETED` | 4 | 已完成 |
+| `FAILED` | 6 | 异常 |
+| `IDLE` 或其他状态 | 5 | 已取消/任务结束 |
 
 ---
 
@@ -361,6 +412,16 @@
 
 使用通配符 `+` 匹配所有设备 ID，接收所有机器狗的上报消息。
 
+### 5.3 机器人侧 MQTT 网关实现约定
+
+机器人侧仅由 `rhw_udp_mqtt_bridge` 中的 `mqtt_gateway_node` 建立 MQTT 连接，任务调度和点位管理功能包不直接连接 MQTT。
+
+- `mqtt_gateway_node` 订阅 `/{ProductID}/{DogID}/Download/Data`，收到 `method=task` 后调用 ROS 2 `/mission/start`
+- `mqtt_gateway_node` 发布 `/{ProductID}/{DogID}/Upload/Data`，通过 `method` 区分 `heart`、`map`、`task`
+- `waypoint_manager` 仅发布 ROS 2 `/waypoint_manager/events`，由网关查询 `/waypoint_manager/get_waypoints` 后上报 `method=map`
+- `mission_bt_node` 仅提供 ROS 2 `/mission/start` 并发布 `/mission/status`，由网关上报 `method=task`
+- 同一 broker 下 MQTT `Client ID` 必须唯一，避免多个节点互相踢下线
+
 ---
 
 ## 六、巡检结果 HTTPS 上报接口
@@ -458,10 +519,24 @@ Content-Type: application/json
 }
 ```
 
+#### 6.1.11 机器人侧实现约定
+
+当前机器人侧已实现定点拍照上报链路：
+
+- `mission_bt_node` 在视觉点位完成 `/ptz/capture_image` 后发布 ROS 2 `/inspection/album_reports`
+- `inspection_reporter_node` 订阅 `/inspection/album_reports`，读取本地图片并调用本接口
+- `taskId` 来自 MQTT 任务下发的 `message.taskId`；如果通过 rqt/命令行手动启动任务且未传 `task_id`，机器人侧生成 `local-...` 任务 ID
+- `pointId` 来自 `WaypointTask.waypoint_id`，`pointName` 来自 `WaypointTask.label`
+- `data` 默认按 `AES-CBC + PKCS7 + Base64` 生成，`signature` 按 `MD5(traceId + data + signatureSecret)` 生成；联调时可通过参数关闭加密和签名，直接发送明文 JSON 字符串
+- AES 密钥、IV、`signatureSecret`、`partnerId`、`version`、接口地址均由 `inspection_reporter_node` 参数配置
+- 上报失败时按 `retry_count` 重试；最终失败只记录日志，不阻塞任务行为树继续执行
+
 ### 6.2 上报告警信息接口
 
 #### 6.2.1 功能说明
 在机器狗巡检过程中识别到隐患信息后，上报告警信息到平台。
+
+当前机器人侧暂未自动实现告警上报；待视觉检测结果、`alarmType` 枚举和告警触发规则确认后，可复用 `inspection_reporter_node` 的 HTTPS 外层封装接入本接口。
 
 #### 6.2.2 协议说明
 

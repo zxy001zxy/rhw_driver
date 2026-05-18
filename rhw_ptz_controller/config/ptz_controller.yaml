@@ -11,7 +11,12 @@ ptz_controller_node:
     default_speed: 40
     default_duration_ms: 350
     status_publish_period: 2.0
-    capture_save_dir: "/tmp/ptz_captures"  # 抓拍图片默认保存目录
+    capture_save_dir: "/home/test/ptz_captures"  # 抓拍图片默认保存目录
+    absolute_move_wait_until_reached: true # 绝对移动服务是否等待到位后再返回
+    absolute_move_timeout_sec: 15.0        # 等待绝对移动到位超时
+    absolute_move_poll_period_sec: 0.5     # 查询当前位置间隔
+    absolute_move_angle_tolerance_deg: 1.0 # 方位角/俯仰角到位容差
+    absolute_move_zoom_tolerance: 0.2      # 变倍到位容差
 
 camera_publisher_node:
   ros__parameters:
@@ -19,19 +24,19 @@ camera_publisher_node:
     rtsp_port: 554
     rtsp_username: "admin"
     rtsp_password: "rhw1314000"
-    rtsp_path: "/Streaming/Channels/101"
+    rtsp_path: "/Streaming/Channels/102"
     rtsp_url_override: ""
-    frame_rate: 30.0
+    frame_rate: 10.0
     image_topic: "/camera/rgb/image_raw"
     frame_id: "camera_link"
     reconnect_interval: 3.0
     read_failure_timeout: 2.0          # 连续读帧失败超过此时间才重连，避免偶发 H.264 错帧触发重连
     rtsp_transport: "tcp"              # tcp 更稳定不丢帧，udp 延迟更低
     ffmpeg_low_latency: false          # true=更低延迟但更怕抖动；false=稳定优先
-    publish_compressed: true           # 同时发布 /camera/rgb/image_raw/compressed
+    publish_compressed: false           # 同时发布 /camera/rgb/image_raw/compressed
     jpeg_quality: 70                   # JPEG 压缩质量 1-100
-    output_width: 1920                 # 输出宽度，0=保持原尺寸
-    output_height: 1080                # 输出高度，0=保持原尺寸
+    output_width: 640                 # 输出宽度，0=保持原尺寸
+    output_height: 480                # 输出高度，0=保持原尺寸
     qos_reliability: "reliable"     # reliable(兼容 rqt 等) / best_effort(低延迟)
     qos_depth: 1                       # 发布队列深度，1=只保留最新帧
 
@@ -41,16 +46,16 @@ thermal_camera_publisher_node:
     rtsp_port: 554
     rtsp_username: "admin"
     rtsp_password: "rhw1314000"
-    rtsp_path: "/Streaming/Channels/201"
+    rtsp_path: "/Streaming/Channels/202"
     rtsp_url_override: ""
-    frame_rate: 15.0
+    frame_rate: 10.0
     image_topic: "/camera/thermal/image_raw"
     frame_id: "thermal_camera_link"
     reconnect_interval: 3.0
     read_failure_timeout: 2.0
     rtsp_transport: "tcp"
     ffmpeg_low_latency: false
-    publish_compressed: true
+    publish_compressed: false
     jpeg_quality: 70
     output_width: 0                    # 保持热成像原始分辨率
     output_height: 0                   # 保持热成像原始分辨率

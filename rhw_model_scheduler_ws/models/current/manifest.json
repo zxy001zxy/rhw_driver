@@ -1,0 +1,29 @@
+{
+  "updated_at": "2026-05-13",
+  "models": [
+    {
+      "task": "fire_equipment_detection",
+      "task_type": "det",
+      "current_path": "models/current/fire_equipment_detection.pt",
+      "sha256": "d51b57a4d28dbc149b45ea11ef92146ac00d000b2dd7c2028b68ac63961eff97"
+    },
+    {
+      "task": "front_panel_pose",
+      "task_type": "kpt",
+      "current_path": "models/current/front_panel_pose.pt",
+      "sha256": "a055fd630910adf47778bc111247c74c930b50a0d2948226c86ac4ada3a5ece7"
+    },
+    {
+      "task": "rust_segmentation",
+      "task_type": "seg",
+      "current_path": "models/current/rust_segmentation.pt",
+      "sha256": "d99ff10a68ca667b918f17d7fbd443bff0f4052086a5f0ade9ed355cc5ed0f5d"
+    },
+    {
+      "task": "colormeter_gauge",
+      "task_type": "gauge",
+      "current_path": "models/current/colormeter_gauge.pt",
+      "sha256": "20143df19c07807b5e9620f6507745bc8bca2fd7c7ec78c18650e5c931600a9a"
+    }
+  ]
+}

@@ -15,7 +15,7 @@ setup(
             'launch/mission_test.launch.py',
         ]),
     ],
-    install_requires=['setuptools', 'py_trees', 'paho-mqtt'],
+    install_requires=['setuptools', 'py_trees'],
     zip_safe=True,
     maintainer='xwqf',
     maintainer_email='xwqf@todo.todo',

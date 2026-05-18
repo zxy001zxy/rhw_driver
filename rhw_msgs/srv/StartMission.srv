@@ -7,6 +7,9 @@ string map_name
 # 有序航点 ID 列表（按此顺序执行）
 string[] waypoint_ids
 
+# 平台任务 ID；手动测试可留空，由任务调度节点自动生成
+string task_id
+
 ---
 
 # 0 失败 1 成功
