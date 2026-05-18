@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import hashlib
 import json
 import random
 import time
@@ -20,6 +19,8 @@ from rclpy.node import Node
 
 from rhw_msgs.msg import InspectionAlbumReport
 from rhw_msgs.srv import InspectionAlbumUpload
+
+from .album_payload import build_album_payload
 
 
 class _AlbumReporterConfigError(ValueError):
@@ -71,6 +72,7 @@ class InspectionReporterNode(Node):
         self.declare_parameter('signature_secret', '')
         self.declare_parameter('encryption_enabled', True)
         self.declare_parameter('signature_enabled', True)
+        self.declare_parameter('include_device_id', False)
         self.declare_parameter('timeout_sec', 5.0)
         self.declare_parameter('retry_count', 2)
         self.declare_parameter('verify_tls', True)
@@ -90,6 +92,7 @@ class InspectionReporterNode(Node):
         self._signature_secret = str(self.get_parameter('signature_secret').value)
         self._encryption_enabled = bool(self.get_parameter('encryption_enabled').value)
         self._signature_enabled = bool(self.get_parameter('signature_enabled').value)
+        self._include_device_id = bool(self.get_parameter('include_device_id').value)
         self._timeout_sec = max(float(self.get_parameter('timeout_sec').value), 0.1)
         self._retry_count = max(int(self.get_parameter('retry_count').value), 0)
         self._verify_tls = bool(self.get_parameter('verify_tls').value)
@@ -180,24 +183,24 @@ class InspectionReporterNode(Node):
 
     def _build_album_payload(self, msg: InspectionAlbumReport) -> dict[str, Any]:
         image_base64 = self._read_image_base64(msg.image_path)
-        data_plain = {
-            'deviceId': self._device_id,
-            'base64': image_base64,
-            'taskId': str(msg.task_id),
-            'pointName': str(msg.point_name or msg.point_id),
-            'pointId': str(msg.point_id),
-        }
-        data_text = json.dumps(data_plain, ensure_ascii=False, separators=(',', ':'))
-        data_field = self._encrypt_data(data_text) if self._encryption_enabled else data_plain
         trace_id = self._new_trace_id()
 
-        return {
-            'traceId': trace_id,
-            'partnerId': self._partner_id,
-            'version': self._version,
-            'data': data_field,
-            'signature': self._signature(trace_id, data_field),
-        }
+        return build_album_payload(
+            trace_id=trace_id,
+            partner_id=self._partner_id,
+            version=self._version,
+            device_id=self._device_id,
+            image_base64=image_base64,
+            task_id=str(msg.task_id),
+            point_name=str(msg.point_name or msg.point_id),
+            point_id=str(msg.point_id),
+            encryption_enabled=self._encryption_enabled,
+            encrypt_data=self._encrypt_data,
+            signature_enabled=self._signature_enabled,
+            fixed_signature=self._fixed_signature,
+            signature_secret=self._signature_secret,
+            include_device_id=self._include_device_id,
+        )
 
     def _read_image_base64(self, image_path: str) -> str:
         path = Path(image_path).expanduser()
@@ -218,23 +221,6 @@ class InspectionReporterNode(Node):
         encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
         encrypted = encryptor.update(padded) + encryptor.finalize()
         return base64.b64encode(encrypted).decode('ascii')
-
-    def _signature(self, trace_id: str, data_field: Any) -> str:
-        if not self._signature_enabled:
-            return ''
-        if self._fixed_signature:
-            return self._fixed_signature
-        if not self._signature_secret:
-            raise _AlbumReporterConfigError(
-                'signature_secret is required when signature_enabled=true'
-            )
-        data_text = (
-            data_field
-            if isinstance(data_field, str)
-            else json.dumps(data_field, ensure_ascii=False, separators=(',', ':'))
-        )
-        source = f'{trace_id}{data_text}{self._signature_secret}'
-        return hashlib.md5(source.encode('utf-8')).hexdigest()
 
     def _post_with_retries(
         self,

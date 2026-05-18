@@ -59,14 +59,15 @@ inspection_reporter_node:
     device_id: "DOG001"
     album_report_url: "https://api.xunjianxitong.click/robot-inspect/inspect/album/report"
     partner_id: "1000009"
-    version: "1.0.0"
+    version: "1.0"
     encryption_enabled: false
     signature_enabled: false
-    signature: ""
+    signature: "4ce70638eae5991dd10064a534d00a21"
+    include_device_id: false
     aes_key: ""
     aes_iv: ""
     signature_secret: ""
     timeout_sec: 15.0
     retry_count: 2
     verify_tls: false
-    debug_log_payload: true
+    debug_log_payload: false

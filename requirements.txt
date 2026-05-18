@@ -1,0 +1,8 @@
+cryptography
+opencv-python
+paho-mqtt
+py_trees
+pytest
+requests
+vosk
+websockets

@@ -195,11 +195,11 @@ ros2 service call /mission/start rhw_msgs/srv/StartMission "{
 
 ```bash
 ros2 launch rhw_task_scheduler mission_test.launch.py \
-  use_real_waypoints:=false \
+  use_real_waypoints:=true \
   use_real_navigation:=false \
-  use_real_ptz:=false \
-  use_real_album_upload:=false \
-  use_real_model_task:=false \
+  use_real_ptz:=true \
+  use_real_album_upload:=true \
+  use_real_model_task:=true \
   bt_viewer:=true
 ```
 
